@@ -1,0 +1,58 @@
+{
+  "meta": {
+    "version": "3.2",
+    "last_metabolism_ts": "2026-02-15T08:10:00",
+    "status": "HEALTHY",
+    "description": "Mammon V3.2 Hormonal Vault - Clean Slate"
+  },
+  "diamond_rails": {
+    "bounds": {
+      "stop_loss_mult": {
+        "min": 1.0,
+        "max": 2.5
+      },
+      "monte_threshold": {
+        "min": 0.45,
+        "max": 0.85
+      },
+      "brain_stem_survival": {
+        "min": 0.5,
+        "max": 0.95
+      }
+    },
+    "last_search_ts": "2026-02-15T08:10:00"
+  },
+  "gold": {
+    "id": "clean_slate_20260215",
+    "params": {
+      "active_gear": 5,
+      "monte_noise_scalar": 0.30,
+      "monte_w_worst": 0.20,
+      "monte_w_neutral": 0.35,
+      "monte_w_best": 0.45,
+      "council_w_atr": 0.15,
+      "council_w_adx": 0.40,
+      "council_w_vol": 0.25,
+      "council_w_vwap": 0.20,
+      "gatekeeper_min_monte": 0.50,
+      "gatekeeper_min_council": 0.50,
+      "callosum_w_monte": 0.35,
+      "callosum_w_right": 0.30,
+      "callosum_w_adx": 0.20,
+      "callosum_w_weak": 0.15,
+      "brain_stem_w_turtle": 0.50,
+      "brain_stem_w_council": 0.50,
+      "brain_stem_survival": 0.70,
+      "brain_stem_noise": 0.05,
+      "brain_stem_sigma": 0.10,
+      "brain_stem_bias": 0.0,
+      "stop_loss_mult": 1.5,
+      "breakeven_mult": 1.2
+    },
+    "fitness_snapshot": 0.50,
+    "coronated_at": "2026-02-15T08:10:00",
+    "origin": "clean_slate"
+  },
+  "silver": null,
+  "bronze_history": []
+}

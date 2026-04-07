@@ -1,0 +1,15 @@
+# Docker build context exclusions
+Archive/
+.git/
+__pycache__/
+*.pyc
+*.pyo
+*.db
+*.duckdb
+*.db-journal
+*.log
+.env
+.venv/
+venv/
+Hippocampus/Archivist/*.db
+Hippocampus/DuckPond/*.duckdb

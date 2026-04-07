@@ -1,0 +1,43 @@
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: mammon-redis
+    ports:
+      - "6379:6379"
+    restart: unless-stopped
+    volumes:
+      - mammon-redis-data:/data
+
+  timescale:
+    image: timescale/timescaledb:latest-pg14
+    container_name: mammon-timescale
+    environment:
+      - POSTGRES_DB=mammon_audit
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+    ports:
+      - "5432:5432"
+    restart: unless-stopped
+    volumes:
+      - mammon-timescale-data:/var/lib/postgresql/data
+
+  dashboard:
+    build: .
+    container_name: mammon-dashboard
+    ports:
+      - "5000:5000"
+    env_file: .env
+    environment:
+      - REDIS_HOST=redis
+      - TIMESCALE_HOST=timescale
+    depends_on:
+      - redis
+      - timescale
+    volumes:
+      # Mount the full engine — live code edits, vault, DBs all accessible
+      - .:/mammon
+    restart: unless-stopped
+
+volumes:
+  mammon-redis-data:
+  mammon-timescale-data:

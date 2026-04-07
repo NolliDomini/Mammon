@@ -1,0 +1,14 @@
+alpaca-py
+duckdb
+flask
+numba
+numpy
+pandas
+scikit-learn
+scipy
+pytest
+python-dotenv
+psutil
+redis
+psycopg2-binary
+pytz

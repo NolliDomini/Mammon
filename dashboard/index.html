@@ -1,0 +1,710 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Mammon V8 - Titanium Dashboard</title>
+  <link rel="stylesheet" href="base_v8.css">
+</head>
+
+<body>
+  <!-- Top Bar -->
+  <div class="top-bar">
+    <div class="brand">MAMMON <span style="color:var(--muted); font-weight:400;">TITANIUM V8</span></div>
+    <div class="pulse-indicator">
+      <div class="pulse-dot" id="pulseDot"></div>
+      <span class="pulse-text" id="pulseText">WAITING</span>
+      <span class="stale-timer" id="staleTimer">0.0s</span>
+    </div>
+  </div>
+
+  <div class="stage">
+    <!-- LEFT SIDEBAR -->
+    <div class="pane-side left">
+      <div class="v-card">
+        <div class="v-card-header">Control Plane</div>
+        <input type="text" id="dryRunSymbol" class="v-input" value="BTC/USD">
+        <button class="v-btn start" id="startBtn" onclick="startDryRun()">START DRY RUN</button>
+        <button class="v-btn stop" onclick="stopEngine()">STOP ENGINE</button>
+        <button class="v-btn" onclick="refreshDryRun()">REFRESH</button>
+      </div>
+      <div class="v-card" style="margin-top:auto;">
+        <div class="v-card-header">System</div>
+        <div id="connectionState"
+          style="font-size:13px; color:var(--ok); text-align:center; padding:8px 0; font-weight:800; letter-spacing:1px;">
+          READY</div>
+      </div>
+    </div>
+
+    <!-- LEFT NEXUS (KPIs) -->
+    <div class="nexus-trigger left"></div>
+    <div class="nexus-drawer left">
+      <div class="v-card-header">Vault KPIs</div>
+      <div class="kpi-row">
+        <div class="k">Orders</div>
+        <div class="v" id="dryOrders">0</div>
+      </div>
+      <div class="kpi-row">
+        <div class="k">Fills</div>
+        <div class="v" id="dryFills">0</div>
+      </div>
+      <div class="kpi-row">
+        <div class="k">Positions</div>
+        <div class="v" id="dryPositions">0</div>
+      </div>
+      <div class="kpi-row">
+        <div class="k">Net PnL</div>
+        <div class="v" id="dryNetPnl">$0.00</div>
+      </div>
+      <div class="kpi-row">
+        <div class="k">Drawdown</div>
+        <div class="v" id="dryDrawdown">$0.00</div>
+      </div>
+      <div class="kpi-row">
+        <div class="k">Win Rate</div>
+        <div class="v" id="dryWinRate">0.0%</div>
+      </div>
+      <div style="margin-top:auto; font-size:11px; color:var(--muted); text-align:center;">EXIT: HOVER MAIN STAGE</div>
+    </div>
+
+    <!-- MAIN STAGE -->
+    <div class="pane-main">
+      <div class="v-card-header" style="margin-bottom:12px;">Observation Stage <span style="color:var(--ok)">5M</span>
+      </div>
+      <div class="chart-mount" id="dryRunChartMount">
+        <div id="chartStatus"
+          style="color:var(--muted); font-size:12px; position:absolute; z-index:2; top:12px; left:12px;">INITIALIZING
+          CHART...</div>
+        <div id="chartCanvas" style="position:absolute; inset:0;"></div>
+      </div>
+    </div>
+
+    <!-- RIGHT SIDEBAR (Brain Frame) -->
+    <div class="pane-side right">
+      <div class="v-card-header">Brain Frame</div>
+      <div class="bf-section">
+        <div class="bf-title">Pulse</div>
+        <div class="bf-grid">
+          <div class="bf-cell">
+            <div class="k">Pulse</div>
+            <div class="v" id="bfCurrentPulse">-</div>
+          </div>
+          <div class="bf-cell">
+            <div class="k">Symbol</div>
+            <div class="v" id="bfSymbol">-</div>
+          </div>
+          <div class="bf-cell">
+            <div class="k">Price</div>
+            <div class="v" id="bfPrice">-</div>
+          </div>
+          <div class="bf-cell">
+            <div class="k">Mode</div>
+            <div class="v" id="bfMode">-</div>
+          </div>
+          <div class="bf-cell">
+            <div class="k">Reason</div>
+            <div class="v" id="bfReason">-</div>
+          </div>
+          <div class="bf-cell">
+            <div class="k">Total</div>
+            <div class="v" id="bfTotal">-</div>
+          </div>
+        </div>
+      </div>
+      <div class="bf-section">
+        <div class="bf-title">Structure</div>
+        <div class="bf-grid">
+          <div class="bf-cell">
+            <div class="k">Tier1</div>
+            <div class="v" id="bfTier1">-</div>
+          </div>
+          <div class="bf-cell">
+            <div class="k">Gear</div>
+            <div class="v" id="bfGear">-</div>
+          </div>
+          <div class="bf-cell">
+            <div class="k">Hi</div>
+            <div class="v" id="bfHi">-</div>
+          </div>
+          <div class="bf-cell">
+            <div class="k">Lo</div>
+            <div class="v" id="bfLo">-</div>
+          </div>
+        </div>
+      </div>
+      <div class="bf-section">
+        <div class="bf-title">Environment</div>
+        <div class="bf-grid">
+          <div class="bf-cell">
+            <div class="k">Council</div>
+            <div class="v" id="bfCouncil">-</div>
+          </div>
+          <div class="bf-cell">
+            <div class="k">ATR</div>
+            <div class="v" id="bfAtr">-</div>
+          </div>
+          <div class="bf-cell">
+            <div class="k">Spread</div>
+            <div class="v" id="bfBidAsk">-</div>
+          </div>
+          <div class="bf-cell">
+            <div class="k">Regime</div>
+            <div class="v" id="bfSpreadRegime">-</div>
+          </div>
+          <div class="bf-cell">
+            <div class="k">ADX</div>
+            <div class="v" id="bfAdx">-</div>
+          </div>
+          <div class="bf-cell">
+            <div class="k">Vol</div>
+            <div class="v" id="bfVol">-</div>
+          </div>
+        </div>
+      </div>
+      <div class="bf-section">
+        <div class="bf-title val">Valuation</div>
+        <div class="bf-grid">
+          <div class="bf-cell">
+            <div class="k">Mean</div>
+            <div class="v" id="bfMean">-</div>
+          </div>
+          <div class="bf-cell">
+            <div class="k">Z-Dist</div>
+            <div class="v" id="bfZDist">-</div>
+          </div>
+          <div class="bf-cell">
+            <div class="k">Spread</div>
+            <div class="v" id="bfSpreadScore">-</div>
+          </div>
+        </div>
+      </div>
+      <div class="bf-section">
+        <div class="bf-title exec">Execution</div>
+        <div class="bf-grid">
+          <div class="bf-cell">
+            <div class="k">Slip</div>
+            <div class="v" id="bfSlippage">-</div>
+          </div>
+          <div class="bf-cell">
+            <div class="k">Cost</div>
+            <div class="v" id="bfCost">-</div>
+          </div>
+        </div>
+      </div>
+      <div class="bf-section">
+        <div class="bf-title">Risk</div>
+        <div class="bf-grid">
+          <div class="bf-cell">
+            <div class="k">Monte</div>
+            <div class="v" id="bfMonte">-</div>
+          </div>
+          <div class="bf-cell">
+            <div class="k">Tier</div>
+            <div class="v" id="bfTier">-</div>
+          </div>
+          <div class="bf-cell">
+            <div class="k">Regime</div>
+            <div class="v" id="bfRegime">-</div>
+          </div>
+          <div class="bf-cell">
+            <div class="k">Worst</div>
+            <div class="v" id="bfWorst">-</div>
+          </div>
+          <div class="bf-cell">
+            <div class="k">Neutral</div>
+            <div class="v" id="bfNeutral">-</div>
+          </div>
+          <div class="bf-cell">
+            <div class="k">Best</div>
+            <div class="v" id="bfBest">-</div>
+          </div>
+        </div>
+      </div>
+      <div class="bf-section">
+        <div class="bf-title comm">Command</div>
+        <div class="bf-grid">
+          <div class="bf-cell">
+            <div class="k">Apprv</div>
+            <div class="v" id="bfApproved">-</div>
+          </div>
+          <div class="bf-cell">
+            <div class="k">Ready</div>
+            <div class="v" id="bfReady">-</div>
+          </div>
+          <div class="bf-cell">
+            <div class="k">Qty</div>
+            <div class="v" id="bfQty">-</div>
+          </div>
+          <div class="bf-cell">
+            <div class="k">Notional</div>
+            <div class="v" id="bfNotional">-</div>
+          </div>
+          <div class="bf-cell">
+            <div class="k">Convict</div>
+            <div class="v" id="bfConviction">-</div>
+          </div>
+          <div class="bf-cell">
+            <div class="k">Risk%</div>
+            <div class="v" id="bfRiskUsed">-</div>
+          </div>
+          <div class="bf-cell" style="grid-column: 1 / -1;">
+            <div class="k">Size Reason</div>
+            <div class="v" id="bfSizingReason">-</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- RIGHT NEXUS (Logs) -->
+    <div class="nexus-trigger right"></div>
+    <div class="nexus-drawer right">
+      <div class="v-card-header">Neural Log</div>
+      <div class="log-box" id="mnerLog"></div>
+      <div style="margin-top:auto; font-size:11px; color:var(--muted); text-align:center;">EXIT: HOVER MAIN STAGE</div>
+    </div>
+
+    <!-- BOTTOM BAR (Golden Params) -->
+    <div class="pane-bottom" id="goldenParamsStrip">
+      <div class="pg-group weight-1">
+        <div class="pg-title">Strategy</div>
+        <div class="pg-grid">
+          <div class="pg-cell">
+            <div class="k">Gear</div>
+            <div class="v">-</div>
+          </div>
+          <div class="pg-cell">
+            <div class="k">GK M.</div>
+            <div class="v">-</div>
+          </div>
+          <div class="pg-cell">
+            <div class="k">Stop</div>
+            <div class="v">-</div>
+          </div>
+          <div class="pg-cell">
+            <div class="k">BkEvn</div>
+            <div class="v">-</div>
+          </div>
+        </div>
+      </div>
+      <div class="pg-group weight-1">
+        <div class="pg-title">Monte</div>
+        <div class="pg-grid">
+          <div class="pg-cell">
+            <div class="k">Noise</div>
+            <div class="v">-</div>
+          </div>
+          <div class="pg-cell">
+            <div class="k">W Wrst</div>
+            <div class="v">-</div>
+          </div>
+          <div class="pg-cell">
+            <div class="k">W Neut</div>
+            <div class="v">-</div>
+          </div>
+          <div class="pg-cell">
+            <div class="k">W Best</div>
+            <div class="v">-</div>
+          </div>
+        </div>
+      </div>
+      <div class="pg-group weight-1">
+        <div class="pg-title">Council</div>
+        <div class="pg-grid">
+          <div class="pg-cell">
+            <div class="k">W ATR</div>
+            <div class="v">-</div>
+          </div>
+          <div class="pg-cell">
+            <div class="k">W ADX</div>
+            <div class="v">-</div>
+          </div>
+          <div class="pg-cell">
+            <div class="k">W Vol</div>
+            <div class="v">-</div>
+          </div>
+          <div class="pg-cell">
+            <div class="k">W VWAP</div>
+            <div class="v">-</div>
+          </div>
+        </div>
+      </div>
+      <div class="pg-group weight-1">
+        <div class="pg-title">Callosum</div>
+        <div class="pg-grid">
+          <div class="pg-cell">
+            <div class="k">W Monte</div>
+            <div class="v">-</div>
+          </div>
+          <div class="pg-cell">
+            <div class="k">W Right</div>
+            <div class="v">-</div>
+          </div>
+          <div class="pg-cell">
+            <div class="k">W Weak</div>
+            <div class="v">-</div>
+          </div>
+        </div>
+      </div>
+      <div class="pg-group weight-2">
+        <div class="pg-title">Execution</div>
+        <div class="pg-grid">
+          <div class="pg-cell">
+            <div class="k">F Mak</div>
+            <div class="v">-</div>
+          </div>
+          <div class="pg-cell">
+            <div class="k">F Tak</div>
+            <div class="v">-</div>
+          </div>
+          <div class="pg-cell">
+            <div class="k">S Max</div>
+            <div class="v">-</div>
+          </div>
+          <div class="pg-cell">
+            <div class="k">Risk%</div>
+            <div class="v">-</div>
+          </div>
+          <div class="pg-cell">
+            <div class="k">Eqty</div>
+            <div class="v">-</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- TradingView Lightweight Charts CDN -->
+  <script src="https://unpkg.com/lightweight-charts@4.2.1/dist/lightweight-charts.standalone.production.js"></script>
+  <script>
+    // ── Config ──
+    const API_BASE = '';
+    const apiToken = window.MAMMON_TOKEN || '';
+    let evtSource = null;
+    let treasuryPollTimer = null;
+    let staleInterval = null;
+    let timeSincePulse = 0;
+
+    // ── Chart State ──
+    let chart = null;
+    let candleSeries = null;
+    let chartResizeObserver = null;
+
+    const id = (x) => document.getElementById(x);
+    const txt = (x, v) => { const e = id(x); if (e) e.textContent = v; };
+    const n = (v, d = 0) => Number.isFinite(Number(v)) ? Number(v) : d;
+
+    function authHeaders() {
+      return { 'Authorization': `Bearer ${apiToken}`, 'Content-Type': 'application/json' };
+    }
+
+    function setStatus(msg) { txt('connectionState', msg); }
+
+    // ── TradingView Chart ──
+    function setChartStatus(text, visible = true) {
+      const s = id('chartStatus');
+      if (!s) return;
+      s.textContent = text;
+      s.style.display = visible ? 'block' : 'none';
+    }
+
+    function initChart() {
+      const mount = id('chartCanvas');
+      if (!mount || typeof LightweightCharts === 'undefined') {
+        setChartStatus('CHART LIBRARY UNAVAILABLE');
+        return;
+      }
+      if (chart) { chart.remove(); chart = null; }
+      chart = LightweightCharts.createChart(mount, {
+        layout: { background: { color: 'transparent' }, textColor: '#8ea7bc' },
+        grid: { vertLines: { color: '#1b3348' }, horzLines: { color: '#1b3348' } },
+        rightPriceScale: { borderColor: '#244058' },
+        timeScale: { borderColor: '#244058', timeVisible: true },
+        handleScale: true,
+        handleScroll: true,
+      });
+      candleSeries = chart.addCandlestickSeries({
+        upColor: '#19c37d',
+        downColor: '#f45b69',
+        borderVisible: false,
+        wickUpColor: '#19c37d',
+        wickDownColor: '#f45b69',
+      });
+      chartResizeObserver = new ResizeObserver(() => {
+        if (chart) chart.applyOptions({ width: mount.clientWidth, height: mount.clientHeight });
+      });
+      chartResizeObserver.observe(mount);
+      setChartStatus('IDLE', false);
+    }
+
+    function updateCandle(d) {
+      if (!candleSeries || !d.bar_time) return;
+      candleSeries.update({
+        time: d.bar_time,
+        open: n(d.bar_open),
+        high: n(d.bar_high),
+        low: n(d.bar_low),
+        close: n(d.bar_close),
+      });
+    }
+
+    function destroyChart() {
+      if (chartResizeObserver) { chartResizeObserver.disconnect(); chartResizeObserver = null; }
+      if (chart) { chart.remove(); chart = null; candleSeries = null; }
+    }
+
+    // ── Pulse Dot Animation ──
+    function triggerPulse(state) {
+      timeSincePulse = 0;
+      const colors = { SEED: 'var(--seed)', ACTION: 'var(--action)', MINT: 'var(--mint)', WAITING: 'var(--muted)' };
+      txt('pulseText', state);
+      id('pulseDot').style.background = colors[state] || 'var(--muted)';
+      const rgbMap = { SEED: '245,158,11', ACTION: '59,130,246', MINT: '16,185,129' };
+      if (state !== 'WAITING' && rgbMap[state]) {
+        document.documentElement.style.setProperty('--glow-current', `rgba(${rgbMap[state]}, 0.15)`);
+      } else {
+        document.documentElement.style.setProperty('--glow-current', 'transparent');
+      }
+    }
+
+    function startStaleTimer() {
+      stopStaleTimer();
+      timeSincePulse = 0;
+      staleInterval = setInterval(() => {
+        timeSincePulse += 0.1;
+        const el = id('staleTimer');
+        if (el) {
+          el.textContent = timeSincePulse.toFixed(1) + 's';
+          el.style.color = timeSincePulse > 15 ? 'var(--bad)' : 'var(--muted)';
+        }
+      }, 100);
+    }
+
+    function stopStaleTimer() {
+      if (staleInterval) clearInterval(staleInterval);
+      staleInterval = null;
+      txt('staleTimer', '0.0s');
+    }
+
+    // ── Neural Log ──
+    function addLog(msg, level) {
+      const log = id('mnerLog');
+      if (!log) return;
+      const el = document.createElement('div');
+      const now = new Date();
+      const ts = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}:${String(now.getSeconds()).padStart(2, '0')}`;
+      const color = level === 'error' ? 'var(--bad)' : 'var(--info)';
+      el.innerHTML = `<span style="color:${color}">[${ts}]</span> ${msg}`;
+      log.appendChild(el);
+      log.scrollTop = log.scrollHeight;
+      while (log.children.length > 200) log.removeChild(log.firstChild);
+    }
+
+    // ── Live Pulse Rendering ──
+    function applyPulse(d) {
+      const council = n(d.council_score), monte = n(d.monte_score), tier = n(d.tier_score);
+      triggerPulse(String(d.pulse_type || 'WAITING'));
+      // Pulse
+      txt('bfCurrentPulse', String(d.pulse_type || '-'));
+      txt('bfTotal', (council + monte + tier).toFixed(3));
+      txt('bfSymbol', String(d.symbol || '-'));
+      txt('bfPrice', n(d.price).toFixed(2));
+      txt('bfMode', String(d.mode || '-'));
+      txt('bfReason', String(d.reason || '-'));
+      // Structure
+      txt('bfTier1', String(d.tier1_signal ?? '-'));
+      txt('bfGear', String(d.gear ?? '-'));
+      txt('bfHi', n(d.active_hi).toFixed(2));
+      txt('bfLo', n(d.active_lo).toFixed(2));
+      // Environment
+      txt('bfCouncil', council.toFixed(3));
+      txt('bfAtr', n(d.atr).toFixed(6));
+      txt('bfBidAsk', n(d.bid_ask_bps).toFixed(2));
+      txt('bfSpreadRegime', String(d.spread_regime || 'UNKNOWN'));
+      txt('bfAdx', n(d.adx).toFixed(3));
+      txt('bfVol', n(d.volume_score).toFixed(3));
+      // Valuation
+      txt('bfMean', n(d.val_mean).toFixed(2));
+      txt('bfZDist', n(d.val_z_distance).toFixed(4));
+      txt('bfSpreadScore', n(d.spread_score).toFixed(3));
+      // Execution
+      txt('bfSlippage', n(d.exec_expected_slippage_bps).toFixed(2));
+      txt('bfCost', n(d.exec_total_cost_bps).toFixed(2));
+      // Risk
+      txt('bfMonte', monte.toFixed(3));
+      txt('bfTier', tier.toFixed(3));
+      txt('bfRegime', String(d.regime_id || '-'));
+      txt('bfWorst', n(d.worst_survival).toFixed(4));
+      txt('bfNeutral', n(d.neutral_survival).toFixed(4));
+      txt('bfBest', n(d.best_survival).toFixed(4));
+      // Command
+      const approvedEl = id('bfApproved');
+      txt('bfApproved', n(d.approved) ? 'YES' : 'NO');
+      if (approvedEl) approvedEl.style.color = n(d.approved) ? 'var(--ok)' : '';
+      const readyEl = id('bfReady');
+      txt('bfReady', n(d.ready_to_fire) ? 'YES' : 'NO');
+      if (readyEl) readyEl.style.color = n(d.ready_to_fire) ? 'var(--mint)' : '';
+      txt('bfQty', n(d.qty).toFixed(6));
+      txt('bfNotional', '$' + n(d.notional).toFixed(2));
+      txt('bfConviction', n(d.cost_adjusted_conviction).toFixed(4));
+      txt('bfRiskUsed', n(d.risk_used).toFixed(6));
+      txt('bfSizingReason', String(d.size_reason || 'NONE'));
+      // Update chart candle
+      updateCandle(d);
+    }
+
+    // ── SSE Stream ──
+    function connectSSE() {
+      if (evtSource) evtSource.close();
+      evtSource = new EventSource(`${API_BASE}/api/stream?token=${apiToken}`);
+      evtSource.onmessage = (e) => {
+        try {
+          const event = JSON.parse(e.data);
+          if (event.type === 'pulse' && event.data) {
+            applyPulse(event.data);
+            addLog(`${event.data.pulse_type} | ${event.data.symbol} | $${n(event.data.price).toFixed(2)}`);
+          } else if (event.type === 'engine') {
+            setStatus(event.data.msg || 'ENGINE_EVENT');
+            addLog(event.data.msg || 'Engine event');
+          } else if (event.type === 'error') {
+            addLog(`ERROR: ${event.data.msg || event.data.symbol || 'unknown'}`, 'error');
+          } else if (event.type === 'system') {
+            setStatus(event.data.msg || 'SYSTEM');
+            addLog(`SYSTEM: ${event.data.msg}`, 'error');
+          }
+        } catch (err) { addLog('SSE parse error', 'error'); }
+      };
+      evtSource.onerror = () => { setStatus('SSE_DISCONNECTED'); };
+    }
+
+    function disconnectSSE() {
+      if (evtSource) { evtSource.close(); evtSource = null; }
+    }
+
+    // ── Treasury KPI Polling ──
+    async function refreshTreasury() {
+      try {
+        const res = await fetch(`${API_BASE}/api/treasury/status`, { headers: authHeaders() });
+        if (!res.ok) return;
+        const d = await res.json();
+        txt('dryOrders', String(d.orders || 0));
+        txt('dryFills', String(d.fills || 0));
+        txt('dryPositions', String(d.positions || 0));
+        txt('dryNetPnl', '$' + n(d.net_pnl).toFixed(2));
+        txt('dryDrawdown', '$' + n(d.drawdown).toFixed(2));
+        txt('dryWinRate', n(d.win_rate).toFixed(1) + '%');
+      } catch (e) { /* silent */ }
+    }
+
+    function startTreasuryPoll() {
+      stopTreasuryPoll();
+      refreshTreasury();
+      treasuryPollTimer = setInterval(refreshTreasury, 5000);
+    }
+
+    function stopTreasuryPoll() {
+      if (treasuryPollTimer) clearInterval(treasuryPollTimer);
+      treasuryPollTimer = null;
+    }
+
+    // ── Golden Params ──
+    async function loadGoldenParams() {
+      try {
+        const res = await fetch(`${API_BASE}/api/vault/gold`, { headers: authHeaders() });
+        if (!res.ok) return;
+        const d = await res.json();
+        const p = d.params || {};
+        const strip = id('goldenParamsStrip');
+        if (!strip) return;
+        const map = {
+          'Gear': p.active_gear, 'GK M.': p.gatekeeper_min_monte,
+          'Stop': p.stop_loss_mult, 'BkEvn': p.breakeven_mult,
+          'Noise': p.monte_noise_scalar, 'W Wrst': p.monte_w_worst,
+          'W Neut': p.monte_w_neutral, 'W Best': p.monte_w_best,
+          'W ATR': p.council_w_atr, 'W ADX': p.council_w_adx,
+          'W Vol': p.council_w_vol, 'W VWAP': p.council_w_vwap,
+          'W Monte': p.callosum_w_monte, 'W Right': p.callosum_w_right,
+          'W Weak': p.callosum_w_weak,
+          'F Mak': p.fee_maker_bps, 'F Tak': p.fee_taker_bps,
+          'S Max': p.max_slippage_bps, 'Risk%': p.risk_per_trade_pct,
+          'Eqty': p.equity,
+        };
+        strip.querySelectorAll('.pg-cell').forEach(cell => {
+          const label = cell.querySelector('.k');
+          const val = cell.querySelector('.v');
+          if (label && val && map[label.textContent] !== undefined) {
+            const v = map[label.textContent];
+            val.textContent = typeof v === 'number' ? (Number.isInteger(v) ? v : v.toFixed(2)) : v;
+          }
+        });
+      } catch (e) { addLog('Gold params load failed', 'error'); }
+    }
+
+    // ── Start / Stop ──
+    async function startDryRun() {
+      const symbol = (id('dryRunSymbol').value || 'BTC/USD').trim();
+      if (!apiToken) {
+        setStatus('NO_TOKEN');
+        addLog('Server did not inject token — check .env', 'error');
+        return;
+      }
+      try {
+        const res = await fetch(`${API_BASE}/api/start`, {
+          method: 'POST', headers: authHeaders(),
+          body: JSON.stringify({ mode: 'DRY_RUN', symbols: [symbol] }),
+        });
+        const d = await res.json();
+        if (!res.ok) {
+          setStatus('START_FAILED');
+          addLog(`Start failed: ${d.error || 'unknown'}`, 'error');
+          return;
+        }
+        id('startBtn').textContent = 'RUNNING...';
+        id('startBtn').disabled = true;
+        setStatus('DRY_RUN_ACTIVE');
+        addLog(`Engine started: ${symbol} in DRY_RUN`);
+        initChart();
+        connectSSE();
+        startTreasuryPoll();
+        startStaleTimer();
+        loadGoldenParams();
+      } catch (e) {
+        setStatus('CONNECTION_ERROR');
+        addLog('Cannot reach backend', 'error');
+      }
+    }
+
+    async function stopEngine() {
+      try { await fetch(`${API_BASE}/api/stop`, { method: 'POST', headers: authHeaders() }); } catch (e) { /* silent */ }
+      disconnectSSE();
+      stopTreasuryPoll();
+      stopStaleTimer();
+      destroyChart();
+      triggerPulse('WAITING');
+      id('startBtn').textContent = 'START DRY RUN';
+      id('startBtn').disabled = false;
+      setStatus('STOPPED');
+      addLog('Engine stopped');
+    }
+
+    function refreshDryRun() {
+      refreshTreasury();
+      loadGoldenParams();
+      addLog('Manual refresh');
+    }
+
+    // ── Init ──
+    (function init() {
+      if (apiToken) {
+        setStatus('READY');
+        addLog('Token auto-loaded from server.');
+      } else {
+        setStatus('NO_TOKEN');
+        addLog('No token — check MAMMON_API_TOKEN in .env', 'error');
+      }
+      initChart();
+    })();
+  </script>
+</body>
+
+</html>

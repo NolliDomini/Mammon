@@ -1,0 +1,88 @@
+{
+  "meta": {
+    "version": "4.0",
+    "last_metabolism_ts": "2026-02-28T21:00:00",
+    "status": "HEALTHY",
+    "description": "Mammon V4.0 Hormonal Vault - Execution Friction + Evolution"
+  },
+  "diamond_rails": {
+    "bounds": {
+      "stop_loss_mult": {
+        "min": 1.0,
+        "max": 2.5
+      },
+      "monte_threshold": {
+        "min": 0.45,
+        "max": 0.85
+      },
+      "brain_stem_survival": {
+        "min": 0.5,
+        "max": 0.95
+      }
+    },
+    "last_search_ts": "2026-02-15T08:10:00"
+  },
+  "titanium": null,
+  "platinum": null,
+  "gold": {
+    "id": "clean_slate_20260215",
+    "params": {
+      "active_gear": 5,
+      "monte_noise_scalar": 0.30,
+      "monte_w_worst": 0.20,
+      "monte_w_neutral": 0.35,
+      "monte_w_best": 0.45,
+      "council_w_atr": 0.15,
+      "council_w_adx": 0.40,
+      "council_w_vol": 0.25,
+      "council_w_vwap": 0.20,
+      "council_w_spread": 0.15,
+      "gatekeeper_min_monte": 0.50,
+      "gatekeeper_min_council": 0.50,
+      "callosum_w_monte": 0.35,
+      "callosum_w_right": 0.30,
+      "callosum_w_adx": 0.20,
+      "callosum_w_weak": 0.15,
+      "brain_stem_w_turtle": 0.50,
+      "brain_stem_w_council": 0.50,
+      "brain_stem_survival": 0.70,
+      "brain_stem_noise": 0.05,
+      "brain_stem_sigma": 0.10,
+      "brain_stem_bias": 0.0,
+      "stop_loss_mult": 1.5,
+      "breakeven_mult": 1.2,
+      "spread_tight_threshold_bps": 5,
+      "spread_normal_threshold_bps": 15,
+      "spread_wide_threshold_bps": 50,
+      "spread_score_scalar": 2.0,
+      "spread_atr_ratio": 0.10,
+      "fee_maker_bps": 0,
+      "fee_taker_bps": 0,
+      "fee_fallback_pct": 0.001,
+      "max_slippage_bps": 100,
+      "slippage_impact_scalar": 0.1,
+      "slippage_vol_scalar": 0.05,
+      "max_cost_cap_bps": 50,
+      "risk_per_trade_pct": 0.01,
+      "max_notional": 10000,
+      "max_qty": 100,
+      "min_qty": 0.001,
+      "max_z": 2.0,
+      "cost_penalty_divisor": 100,
+      "max_cost_penalty": 0.5,
+      "equity": 10000.0,
+      "brain_stem_val_n_sigma": 1.5,
+      "crawler_lookback_hours": 24,
+      "crawler_silver_top_n": 5,
+      "crawler_mine_interval": 12,
+      "promotion_delta": 0.05,
+      "soak_window": 12,
+      "silver_cap": 20
+    },
+    "fitness_snapshot": 0.50,
+    "coronated_at": "2026-02-15T08:10:00",
+    "origin": "clean_slate"
+  },
+  "silver": [],
+  "bronze": []
+}
