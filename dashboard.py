@@ -8,7 +8,9 @@ import json
 import time
 import queue
 import threading
+import traceback
 import uuid
+from collections import deque
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Dict, Optional
@@ -30,7 +32,56 @@ load_dotenv()
 DASHBOARD_DIR = ROOT_DIR / "dashboard"
 app = Flask(__name__, static_folder=str(DASHBOARD_DIR), static_url_path="/static")
 API_BEARER_TOKEN = os.environ.get("MAMMON_API_TOKEN", "dev-token")
+STOP_ON_WINDOW_CLOSE = str(os.environ.get("MAMMON_STOP_ON_WINDOW_CLOSE", "0")).strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+ENGINE_LIFECYCLE_LOG_PATH = ROOT_DIR / "runtime" / "logs" / "engine_lifecycle.jsonl"
+_engine_lifecycle_log_lock = threading.Lock()
 _rate_buckets: Dict[str, list] = {}
+
+
+def _clip(value: Any, maxlen: int = 240) -> str:
+    return str(value or "")[:maxlen]
+
+
+def _utc_iso_now() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def _write_engine_lifecycle_event(event_type: str, **fields) -> None:
+    record = {"ts": _utc_iso_now(), "event": event_type}
+    record.update(fields)
+    try:
+        ENGINE_LIFECYCLE_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        with _engine_lifecycle_log_lock:
+            with ENGINE_LIFECYCLE_LOG_PATH.open("a", encoding="utf-8") as fp:
+                fp.write(json.dumps(record, ensure_ascii=True) + "\n")
+    except Exception as e:
+        print(f"[DASHBOARD] lifecycle log write failed: {_safe_str(e)}")
+
+
+def _read_engine_lifecycle_tail(limit: int = 100) -> list:
+    if limit <= 0:
+        return []
+    if not ENGINE_LIFECYCLE_LOG_PATH.exists():
+        return []
+    ring = deque(maxlen=min(limit, 500))
+    try:
+        with ENGINE_LIFECYCLE_LOG_PATH.open("r", encoding="utf-8") as fp:
+            for line in fp:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    ring.append(json.loads(line))
+                except Exception:
+                    continue
+    except Exception:
+        return []
+    return list(ring)
 
 def _require_infra():
     """Fail hard if required infra is missing."""
@@ -105,7 +156,11 @@ class EngineState:
         self.symbols: list = []
         self.active_symbol: Optional[str] = None
         self.bars_processed = 0
+        self.run_id: Optional[str] = None
         self.started_at: Optional[float] = None
+        self.last_started_at: Optional[float] = None
+        self.last_stopped_at: Optional[float] = None
+        self.last_run_duration_sec: float = 0.0
         self.lock = threading.Lock()
 
         # SSE queues
@@ -123,6 +178,21 @@ class EngineState:
         self.thalamus = None
         self.last_frame_dict: Optional[dict] = None
 
+        # Lifecycle forensics
+        self.stop_requested = False
+        self.stop_requested_at: Optional[float] = None
+        self.stop_source = ""
+        self.stop_reason = ""
+        self.stop_detail = ""
+        self.last_exit_kind = "NEVER_STARTED"
+        self.last_exit_source = ""
+        self.last_exit_reason = ""
+        self.last_exit_detail = ""
+        self.last_exit_at: Optional[float] = None
+        self.last_exception_type = ""
+        self.last_exception_msg = ""
+        self.last_exception_traceback = ""
+
     def push_event(self, event_type: str, data: dict):
         """Push event to SSE listeners. Non-blocking."""
         event = {
@@ -139,6 +209,15 @@ class EngineState:
                 self.sse_queue.put_nowait(event)
             except queue.Empty:
                 pass
+
+    def request_stop(self, source: str, reason: str, detail: str = ""):
+        """Record stop intent and lower the run flag."""
+        self.stop_requested = True
+        self.stop_requested_at = time.time()
+        self.stop_source = _clip(source, 80) or "unknown"
+        self.stop_reason = _clip(reason, 120) or "unspecified"
+        self.stop_detail = _clip(detail, 240)
+        self.running = False
 
 
 state = EngineState()
@@ -279,6 +358,10 @@ def _frame_to_event(frame, symbol, pulse_type, mode, bar_dict=None) -> dict:
 # ------------------------------------------------------------------ #
 def _engine_loop(symbols: list, is_crypto_map: dict):
     """Background thread: polls Alpaca for latest bars, feeds through the full pipeline."""
+    crash_exc: Optional[Exception] = None
+    crash_traceback = ""
+    run_id = "unknown"
+    current_mode = "DRY_RUN"
     try:
         from Thalamus.relay.service import Thalamus
         from Cerebellum.Soul.orchestrator.service import Orchestrator
@@ -296,7 +379,7 @@ def _engine_loop(symbols: list, is_crypto_map: dict):
 
         with state.lock:
             current_mode = state.mode
-            trading_enabled = state.trading_enabled
+            run_id = state.run_id or "unknown"
 
         persist_pulses_env = os.environ.get("MAMMON_DECISION_PERSIST_PULSES", "SEED,ACTION,MINT")
         persist_pulses = [p.strip().upper() for p in persist_pulses_env.split(",") if p.strip()]
@@ -351,8 +434,67 @@ def _engine_loop(symbols: list, is_crypto_map: dict):
             state.trigger = orchestrator.lobes.get("Brain_Stem")
             state.thalamus = thalamus
 
-        state.push_event("engine", {"msg": f"Engine started in mode={current_mode}"})
-        print(f"[DASHBOARD] Engine started: mode={current_mode}, symbols={symbols}")
+        state.push_event("engine", {
+            "msg": f"Engine started in mode={current_mode}",
+            "lifecycle": "STARTED",
+            "run_id": run_id,
+        })
+        _write_engine_lifecycle_event(
+            "ENGINE_STARTED",
+            run_id=run_id,
+            mode=current_mode,
+            symbols=symbols,
+        )
+        print(f"[DASHBOARD] Engine started: run_id={run_id}, mode={current_mode}, symbols={symbols}")
+
+        furnace = getattr(orchestrator, "furnace", None)
+        furnace_telemetry = getattr(furnace, "telemetry", None) if furnace is not None else None
+        last_furnace_telemetry_len = len(furnace_telemetry) if isinstance(furnace_telemetry, list) else 0
+        last_furnace_logged_activation = int(getattr(furnace, "activation_count", 0) or 0)
+
+        def _publish_furnace_run_events(symbol_hint: str):
+            nonlocal last_furnace_telemetry_len, last_furnace_logged_activation
+            furnace_obj = getattr(orchestrator, "furnace", None)
+            if furnace_obj is None:
+                return
+            telemetry = getattr(furnace_obj, "telemetry", None)
+            if not isinstance(telemetry, list):
+                return
+            if len(telemetry) <= last_furnace_telemetry_len:
+                return
+
+            new_events = telemetry[last_furnace_telemetry_len : len(telemetry)]
+            last_furnace_telemetry_len = len(telemetry)
+
+            for evt in new_events:
+                if not isinstance(evt, dict):
+                    continue
+                decision = str(evt.get("decision", "")).upper()
+                if decision not in {"EXECUTED", "PIPELINE_ERROR"}:
+                    continue
+
+                mint_count = int(evt.get("mint", 0) or 0)
+                activation_count = int(evt.get("activation", 0) or 0)
+                if activation_count <= last_furnace_logged_activation:
+                    continue
+                last_furnace_logged_activation = activation_count
+
+                error_msg = str(evt.get("error", "") or "")
+                msg = f"FURNACE | activation={activation_count} | {decision}"
+                if decision == "PIPELINE_ERROR" and error_msg:
+                    msg += f" | error={_clip(error_msg, 160)}"
+
+                state.push_event(
+                    "furnace",
+                    {
+                        "msg": msg,
+                        "symbol": symbol_hint,
+                        "decision": decision,
+                        "mint_count": mint_count,
+                        "activation_count": activation_count,
+                        "error": error_msg,
+                    },
+                )
 
         # ── Wait for the nearest 5-minute boundary ──
         import math
@@ -423,6 +565,7 @@ def _engine_loop(symbols: list, is_crypto_map: dict):
 
                     last_seen_bar_ts[symbol] = bar_ts
                     pulses = thalamus.drip_pulse(raw_df)
+                    _publish_furnace_run_events(symbol)
 
                     with state.lock:
                         state.bars_processed += 1
@@ -457,19 +600,87 @@ def _engine_loop(symbols: list, is_crypto_map: dict):
             time.sleep(poll_interval_sec)
 
     except Exception as e:
-        state.push_event("error", {"msg": f"Engine crash: {_safe_str(e)}"})
+        crash_exc = e
+        crash_traceback = traceback.format_exc(limit=50)
+        state.push_event("error", {
+            "msg": f"Engine crash: {_safe_str(e)}",
+            "run_id": run_id,
+            "exception_type": e.__class__.__name__,
+        })
         print(f"[DASHBOARD] Engine crash: {e}")
-        import traceback
-        traceback.print_exc()
+        print(crash_traceback)
     finally:
-        state.push_event("engine", {"msg": "Engine stopped"})
+        now_ts = time.time()
         with state.lock:
+            stop_requested = state.stop_requested
+            stop_source = state.stop_source
+            stop_reason = state.stop_reason
+            stop_detail = state.stop_detail
+            started_at = state.started_at
+
+            if crash_exc is not None:
+                exit_kind = "CRASH"
+                exit_source = "engine_loop"
+                exit_reason = crash_exc.__class__.__name__
+                exit_detail = _clip(str(crash_exc), 1000)
+                state.last_exception_type = exit_reason
+                state.last_exception_msg = exit_detail
+                state.last_exception_traceback = _clip(crash_traceback, 12000)
+            elif stop_requested:
+                exit_kind = "STOP_REQUESTED"
+                exit_source = stop_source or "unknown"
+                exit_reason = stop_reason or "unspecified"
+                exit_detail = stop_detail
+            else:
+                exit_kind = "UNEXPECTED_STOP"
+                exit_source = "internal"
+                exit_reason = "running_flag_cleared"
+                exit_detail = "Engine loop exited without explicit stop request."
+
+            state.last_run_duration_sec = round(max(now_ts - started_at, 0.0), 3) if started_at else 0.0
+            state.last_stopped_at = now_ts
+            state.last_exit_at = now_ts
+            state.last_exit_kind = exit_kind
+            state.last_exit_source = _clip(exit_source, 120)
+            state.last_exit_reason = _clip(exit_reason, 200)
+            state.last_exit_detail = _clip(exit_detail, 800)
+
             state.running = False
+            state.started_at = None
+            state.active_symbol = None
             state.orchestrator = None
             state.trigger = None
             state.thalamus = None
             state.thread = None
-        print("[DASHBOARD] Engine stopped.")
+            state.stop_requested = False
+            state.stop_requested_at = None
+            state.stop_source = ""
+            state.stop_reason = ""
+            state.stop_detail = ""
+            state.run_id = None
+
+        state.push_event("engine", {
+            "msg": f"Engine stopped ({exit_kind})",
+            "lifecycle": "STOPPED",
+            "run_id": run_id,
+            "exit_kind": exit_kind,
+            "exit_source": exit_source,
+            "exit_reason": exit_reason,
+            "exit_detail": exit_detail,
+        })
+        _write_engine_lifecycle_event(
+            "ENGINE_EXIT",
+            run_id=run_id,
+            mode=current_mode,
+            symbols=symbols,
+            exit_kind=exit_kind,
+            exit_source=exit_source,
+            exit_reason=exit_reason,
+            exit_detail=exit_detail,
+            duration_sec=state.last_run_duration_sec,
+            had_crash=bool(crash_exc),
+        )
+        print(f"[DASHBOARD] Engine stopped: run_id={run_id}, exit_kind={exit_kind}, reason={exit_reason}")
 
 
 # ------------------------------------------------------------------ #
@@ -502,41 +713,152 @@ def api_start():
     with state.lock:
         if state.running:
             return jsonify({"error": "already_running"}), 409
+        run_id = uuid.uuid4().hex
         state.running = True
+        state.run_id = run_id
         state.mode = mode
         state.symbols = symbols
         state.bars_processed = 0
         state.started_at = time.time()
+        state.last_started_at = state.started_at
+        state.last_stopped_at = None
+        state.stop_requested = False
+        state.stop_requested_at = None
+        state.stop_source = ""
+        state.stop_reason = ""
+        state.stop_detail = ""
+        state.last_exception_type = ""
+        state.last_exception_msg = ""
+        state.last_exception_traceback = ""
 
     state.thread = threading.Thread(
         target=_engine_loop, args=(symbols, is_crypto_map), daemon=True
     )
     state.thread.start()
 
-    return jsonify({"status": "ok", "mode": mode, "symbols": symbols})
+    _write_engine_lifecycle_event(
+        "ENGINE_START_REQUESTED",
+        run_id=run_id,
+        mode=mode,
+        symbols=symbols,
+        source="api_start",
+        remote_addr=_clip(request.remote_addr, 80),
+    )
+    return jsonify({"status": "ok", "mode": mode, "symbols": symbols, "run_id": run_id})
 
 
 @app.route("/api/stop", methods=["POST"])
 def api_stop():
+    data = request.get_json(silent=True) or {}
+    source = _clip(data.get("source") or request.args.get("source") or "api_stop", 80)
+    reason = _clip(data.get("reason") or request.args.get("reason") or "manual_stop", 120)
+    detail = _clip(data.get("detail") or request.args.get("detail") or "", 240)
     with state.lock:
-        state.running = False
-    return jsonify({"status": "ok"})
+        if not state.running:
+            return jsonify({
+                "status": "already_stopped",
+                "last_exit_kind": state.last_exit_kind,
+                "last_exit_reason": state.last_exit_reason,
+            }), 200
+        run_id = state.run_id
+        state.request_stop(source=source, reason=reason, detail=detail)
+
+    state.push_event("system", {
+        "msg": f"Stop requested by {source}: {reason}",
+        "source": source,
+        "reason": reason,
+        "detail": detail,
+        "run_id": run_id,
+    })
+    _write_engine_lifecycle_event(
+        "ENGINE_STOP_REQUESTED",
+        run_id=run_id,
+        source=source,
+        reason=reason,
+        detail=detail,
+        remote_addr=_clip(request.remote_addr, 80),
+    )
+    return jsonify({"status": "ok", "run_id": run_id, "source": source, "reason": reason})
 
 
 @app.route("/api/state", methods=["GET"])
 def api_state():
     with state.lock:
+        uptime = round(time.time() - state.started_at, 1) if (state.running and state.started_at) else 0
         return jsonify({
             "running": state.running,
+            "run_id": state.run_id,
             "mode": state.mode,
             "symbols": state.symbols,
             "active_symbol": state.active_symbol,
             "bars_processed": state.bars_processed,
             "started_at": state.started_at,
+            "last_started_at": state.last_started_at,
+            "last_stopped_at": state.last_stopped_at,
+            "last_run_duration_sec": state.last_run_duration_sec,
             "kill_switch": state.kill_switch,
             "trading_enabled": state.trading_enabled,
-            "uptime_sec": round(time.time() - state.started_at, 1) if state.started_at else 0,
+            "stop_requested": state.stop_requested,
+            "stop_source": state.stop_source,
+            "stop_reason": state.stop_reason,
+            "stop_detail": state.stop_detail,
+            "stop_requested_at": state.stop_requested_at,
+            "last_exit_kind": state.last_exit_kind,
+            "last_exit_source": state.last_exit_source,
+            "last_exit_reason": state.last_exit_reason,
+            "last_exit_detail": state.last_exit_detail,
+            "last_exit_at": state.last_exit_at,
+            "last_exception_type": state.last_exception_type,
+            "last_exception_msg": state.last_exception_msg,
+            "last_exception_traceback": state.last_exception_traceback,
+            "uptime_sec": uptime,
         })
+
+
+@app.route("/api/engine/lifecycle", methods=["GET"])
+def api_engine_lifecycle():
+    raw_limit = request.args.get("limit", "100")
+    try:
+        limit = max(1, min(int(raw_limit), 500))
+    except Exception:
+        limit = 100
+    events = _read_engine_lifecycle_tail(limit=limit)
+    return jsonify({"status": "ok", "count": len(events), "events": events})
+
+
+@app.route("/api/furnace/state", methods=["GET"])
+def api_furnace_state():
+    with state.lock:
+        orchestrator = state.orchestrator
+    if orchestrator is None or not hasattr(orchestrator, "furnace"):
+        return jsonify({"status": "unavailable"}), 503
+    try:
+        furnace = orchestrator.furnace
+        if hasattr(furnace, "get_state"):
+            payload = furnace.get_state()
+            if not isinstance(payload, dict):
+                payload = {}
+            tail = payload.get("telemetry_tail", [])
+            filtered_tail = []
+            if isinstance(tail, list):
+                for evt in tail:
+                    if not isinstance(evt, dict):
+                        continue
+                    decision = str(evt.get("decision", "")).upper()
+                    if decision in {"EXECUTED", "PIPELINE_ERROR"}:
+                        filtered_tail.append(evt)
+            payload["telemetry_tail"] = filtered_tail
+            if filtered_tail:
+                last_evt = filtered_tail[-1]
+                payload["last_decision"] = str(last_evt.get("decision", "IDLE")).upper()
+                payload["last_activation_logged"] = int(last_evt.get("activation", 0) or 0)
+            else:
+                payload["last_decision"] = "IDLE"
+                payload["last_activation_logged"] = int(payload.get("activation_count", 0) or 0)
+            return jsonify({"status": "ok", **payload})
+        return jsonify({"status": "unavailable"}), 503
+    except Exception as e:
+        return jsonify({"status": "error", "detail": _safe_str(e)}), 500
 
 
 # ------------------------------------------------------------------ #
@@ -670,11 +992,20 @@ def serve_index():
     html_path = DASHBOARD_DIR / "index.html"
     html_content = html_path.read_text(encoding="utf-8")
     # Inject token so the UI never needs manual entry
+    stop_on_close_js = "true" if STOP_ON_WINDOW_CLOSE else "false"
     injected = html_content.replace(
         "</head>",
-        f'<script>window.MAMMON_TOKEN="{API_BEARER_TOKEN}";</script>\n</head>',
+        (
+            f'<script>window.MAMMON_TOKEN="{API_BEARER_TOKEN}";'
+            f"window.MAMMON_STOP_ON_CLOSE={stop_on_close_js};</script>\n</head>"
+        ),
     )
-    return injected, 200, {"Content-Type": "text/html; charset=utf-8"}
+    return injected, 200, {
+        "Content-Type": "text/html; charset=utf-8",
+        "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+        "Pragma": "no-cache",
+        "Expires": "0",
+    }
 
 
 @app.route("/<path:path>")
@@ -682,9 +1013,15 @@ def serve_static(path):
     """Catch-all: serve files from the dashboard/ directory."""
     file_path = DASHBOARD_DIR / path
     if file_path.is_file():
-        return send_from_directory(str(DASHBOARD_DIR), path)
-    # Fallback to index.html for SPA-style routing
-    return send_from_directory(str(DASHBOARD_DIR), "index.html")
+        resp = send_from_directory(str(DASHBOARD_DIR), path)
+    else:
+        # Fallback to index.html for SPA-style routing
+        resp = send_from_directory(str(DASHBOARD_DIR), "index.html")
+
+    resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    resp.headers["Pragma"] = "no-cache"
+    resp.headers["Expires"] = "0"
+    return resp
 
 
 # ------------------------------------------------------------------ #

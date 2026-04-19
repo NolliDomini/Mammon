@@ -179,7 +179,7 @@ class ParamCrawler:
             print(f"[CRAWL-E-PROM-1003] SOAK_SCORE_INVALID: {e}")
             return
 
-        gold_fitness = float(gold.get("fitness", 0.5))
+        gold_fitness = float(gold.get("fitness_snapshot", gold.get("fitness_estimate", gold.get("fitness", 0.5))))
         delta = float(standards.get("promotion_delta", 0.05))
         
         try:
@@ -190,12 +190,23 @@ class ParamCrawler:
                 # Piece 224: Delegate coronation to the Pituitary via the Librarian's 
                 # standardized interface. The Librarian already handles vault persistence 
                 # and Gold installation.
-                self.librarian.install_gold_params(
-                    params=titanium["params"],
-                    fitness=avg_titanium_fitness,
-                    origin="DiamondML",
-                    regime_id=frame.risk.regime_id
-                )
+                try:
+                    self.librarian.install_gold_params(
+                        params=titanium["params"],
+                        fitness=avg_titanium_fitness,
+                        origin="DiamondML",
+                        regime_id=frame.risk.regime_id
+                    )
+                except Exception as install_err:
+                    # Keep promotion path alive even when Param DB write path is unavailable.
+                    print(f"[CRAWLER_WARN] install_gold_params failed, using vault fallback: {install_err}")
+                    vault["gold"] = {
+                        "id": str(titanium.get("id", f"diamond_promote_{int(time.time())}")),
+                        "params": titanium["params"],
+                        "fitness_snapshot": avg_titanium_fitness,
+                        "coronated_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+                        "origin": "DiamondML",
+                    }
                 
                 vault = self.librarian.get_hormonal_vault() # Re-load to get updated Gold
                 vault["titanium"] = None # Clear soak

@@ -85,6 +85,8 @@ Execution authority boundaries remain strict:
 - **Gatekeeper + Brain Stem** decide trade eligibility and execution lifecycle.
 - **Pineal** is cleanup/finalization only (not a trading gate).
 - **Volume Furnace** runs optimizer cadence and promotion telemetry; it does not directly place orders.
+- Dashboard close-to-stop behavior is opt-in via `MAMMON_STOP_ON_WINDOW_CLOSE=1` (default `0` for long-running sessions).
+- Engine lifecycle forensics are exposed via `GET /api/state` (`last_exit_*`, `last_exception_*`) and `GET /api/engine/lifecycle`.
 
 ---
 

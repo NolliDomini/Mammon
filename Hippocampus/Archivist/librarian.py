@@ -7,7 +7,7 @@ import psycopg2
 import time
 import uuid
 from datetime import datetime
-from typing import Optional
+from typing import Any, Optional
 from pathlib import Path
 import pandas as pd
 
@@ -133,6 +133,9 @@ class MultiTransportLibrarian:
         self.root_path = Path(__file__).resolve().parents[2]
         self.data_path = self.root_path / "Hippocampus" / "data"
         self.data_path.mkdir(parents=True, exist_ok=True)
+        if not hasattr(self, "_row_id_counter"):
+            # 31-bit monotonic id seed for legacy optimizer audit tables that expect explicit ids.
+            self._row_id_counter = int(time.time_ns() & 0x7FFFFFFF) or 1
         
         # Primary Analytical Store (DuckDB)
         new_path = db_path or self.data_path / "ecosystem_synapse.duckdb"
@@ -155,6 +158,16 @@ class MultiTransportLibrarian:
         self._setup_mint_tables()
         self._run_migrations() # Piece 142
 
+    def _next_row_id(self) -> int:
+        """
+        Generates a process-local monotonic 31-bit integer id.
+        Used for legacy optimizer audit tables where `id` is NOT NULL.
+        """
+        self._row_id_counter = (int(self._row_id_counter) + 1) & 0x7FFFFFFF
+        if self._row_id_counter <= 0:
+            self._row_id_counter = 1
+        return int(self._row_id_counter)
+
     def _load_vault_from_file(self) -> dict:
         vault_path = self.root_path / "Hippocampus" / "hormonal_vault.json"
         if vault_path.exists():
@@ -167,6 +180,109 @@ class MultiTransportLibrarian:
         vault_path.parent.mkdir(parents=True, exist_ok=True)
         with open(vault_path, "w") as f:
             json.dump(vault_data, f, indent=2)
+
+    @staticmethod
+    def _coerce_float(value, default: float = 0.0) -> float:
+        try:
+            return float(value)
+        except Exception:
+            return float(default)
+
+    def _normalize_hormonal_candidate(self, entry: Any) -> Optional[dict]:
+        if not isinstance(entry, dict):
+            return None
+        params = entry.get("params", {})
+        if not isinstance(params, dict):
+            return None
+
+        out = dict(entry)
+        out["params"] = params
+        if "fitness_snapshot" in out:
+            out["fitness_snapshot"] = self._coerce_float(out.get("fitness_snapshot"), 0.0)
+        if "fitness_estimate" in out:
+            out["fitness_estimate"] = self._coerce_float(out.get("fitness_estimate"), 0.0)
+        if "fitness" in out:
+            out["fitness"] = self._coerce_float(out.get("fitness"), 0.0)
+        return out
+
+    def _normalize_hormonal_vault(self, vault_data: Any) -> dict:
+        """
+        Canonical runtime schema for hormonal tiers.
+        Source of truth is the hot table; file remains a mirror.
+        """
+        base = dict(vault_data) if isinstance(vault_data, dict) else {}
+
+        # Meta + rails skeleton
+        meta = base.get("meta")
+        if not isinstance(meta, dict):
+            meta = {}
+        base["meta"] = meta
+
+        rails = base.get("diamond_rails")
+        if not isinstance(rails, dict):
+            rails = {}
+        bounds = rails.get("bounds")
+        if not isinstance(bounds, dict):
+            bounds = {}
+        rails["bounds"] = bounds
+        base["diamond_rails"] = rails
+
+        # Gold: single dict
+        gold = self._normalize_hormonal_candidate(base.get("gold"))
+        if gold is None:
+            gold = {
+                "id": "UNKNOWN",
+                "params": {},
+                "fitness_snapshot": 0.0,
+                "coronated_at": "",
+                "origin": "bootstrap",
+            }
+        elif "fitness_snapshot" not in gold:
+            gold["fitness_snapshot"] = self._coerce_float(
+                gold.get("fitness_estimate", gold.get("fitness", 0.0)),
+                0.0,
+            )
+        base["gold"] = gold
+
+        # Silver: always a list
+        silver_raw = base.get("silver")
+        if isinstance(silver_raw, dict):
+            silver_items = [silver_raw]
+        elif isinstance(silver_raw, list):
+            silver_items = silver_raw
+        else:
+            silver_items = []
+
+        silver_norm = []
+        for item in silver_items:
+            normalized = self._normalize_hormonal_candidate(item)
+            if normalized is None:
+                continue
+            if "fitness" not in normalized:
+                normalized["fitness"] = self._coerce_float(
+                    normalized.get("fitness_estimate", normalized.get("fitness_snapshot", 0.0)),
+                    0.0,
+                )
+            silver_norm.append(normalized)
+        silver_norm.sort(key=lambda row: self._coerce_float(row.get("fitness"), 0.0), reverse=True)
+        base["silver"] = silver_norm
+
+        # Platinum / Titanium: single dict or null
+        for tier in ("platinum", "titanium"):
+            normalized = self._normalize_hormonal_candidate(base.get(tier))
+            base[tier] = normalized if normalized is not None else None
+
+        # Bronze lineage: canonical bronze_history list
+        bronze_raw = base.get("bronze_history")
+        if not isinstance(bronze_raw, list):
+            bronze_raw = base.get("bronze", [])
+        if not isinstance(bronze_raw, list):
+            bronze_raw = []
+        bronze_history = [row for row in bronze_raw if isinstance(row, dict)]
+        base["bronze_history"] = bronze_history
+        base["bronze"] = bronze_history
+
+        return base
 
     def _run_migrations(self):
         """Piece 142: In-place schema migration for Phase 1 fields."""
@@ -473,10 +589,10 @@ class MultiTransportLibrarian:
         )
         self.write(
             """
-            INSERT INTO opt_stage_runs (run_id, ts, stage_name, status, regime_id, metrics_json, reason_code)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO opt_stage_runs (id, run_id, ts, stage_name, status, regime_id, metrics_json, reason_code)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (run_id, time.time(), stage_name, status, regime_id, metrics_json, reason_code)
+            (self._next_row_id(), run_id, time.time(), stage_name, status, regime_id, metrics_json, reason_code)
         )
 
     def upsert_candidate_library(self, candidate_id: str, run_id: str, source_stage: str,
@@ -502,11 +618,12 @@ class MultiTransportLibrarian:
         self.write(
             """
             INSERT INTO opt_scores_components (
-                run_id, candidate_id, expectancy, survival, stability, drawdown,
+                id, run_id, candidate_id, expectancy, survival, stability, drawdown,
                 uncertainty, slippage_cost, final_score, robust_score
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
+                self._next_row_id(),
                 run_id,
                 candidate_id,
                 float(kwargs.get("expectancy", 0.0) or 0.0),
@@ -525,11 +642,12 @@ class MultiTransportLibrarian:
         self.write(
             """
             INSERT INTO opt_promotion_decisions (
-                run_id, candidate_id, decision, reason_code, score, drawdown,
+                id, run_id, candidate_id, decision, reason_code, score, drawdown,
                 stability, slippage_adj, support_count, drift
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
+                self._next_row_id(),
                 run_id,
                 candidate_id,
                 str(kwargs.get("decision", "")),
@@ -548,20 +666,20 @@ class MultiTransportLibrarian:
         """Piece 162 compatibility: Persist diversity statistics."""
         self.write(
             """
-            INSERT INTO opt_diversity_metrics (run_id, stage_name, entropy, coverage, min_distance)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO opt_diversity_metrics (id, run_id, stage_name, entropy, coverage, min_distance)
+            VALUES (?, ?, ?, ?, ?, ?)
             """,
-            (run_id, stage_name, float(entropy), float(coverage), float(min_distance)),
+            (self._next_row_id(), run_id, stage_name, float(entropy), float(coverage), float(min_distance)),
         )
 
     def write_regime_coverage(self, run_id: str, regime_id: str, candidate_count: int, support_count: int):
         """Piece 162 compatibility: Persist regime support coverage."""
         self.write(
             """
-            INSERT INTO opt_regime_coverage (run_id, regime_id, candidate_count, support_count)
-            VALUES (?, ?, ?, ?)
+            INSERT INTO opt_regime_coverage (id, run_id, regime_id, candidate_count, support_count)
+            VALUES (?, ?, ?, ?, ?)
             """,
-            (run_id, regime_id, int(candidate_count), int(support_count)),
+            (self._next_row_id(), run_id, regime_id, int(candidate_count), int(support_count)),
         )
 
     def write_bayesian_diagnostic(self, run_id: str, candidate_id: str, mu: float, sigma: float, 
@@ -809,32 +927,57 @@ class MultiTransportLibrarian:
         return self._timescale_conn
 
     def get_hormonal_vault(self) -> dict:
-        """Piece 115: Atomic Vault Read from Redis HASH."""
+        """
+        Piece 115: Atomic Vault Read from Redis HASH.
+        Canonicalizes schema and keeps JSON mirror synced from hot table.
+        """
         redis_conn = self.get_redis_connection()
         key = "mammon:hormonal_vault"
-        
-        # Check if Redis has the vault; if not, bootstrap from JSON
-        if not redis_conn.exists(key):
-            vault_data = self._load_vault_from_file()
-            if vault_data:
-                self.set_hormonal_vault(vault_data)
-                return vault_data
-            return vault_data
 
-        raw_vault = redis_conn.hgetall(key)
-        # Redis returns a dict of strings; we need to deserialize the JSON values
-        return {k: json.loads(v) for k, v in raw_vault.items()}
+        # Bootstrap hot table from file mirror when Redis is empty.
+        if not redis_conn.exists(key):
+            seeded = self._normalize_hormonal_vault(self._load_vault_from_file())
+            self.set_hormonal_vault(seeded)
+            return seeded
+
+        raw_vault = redis_conn.hgetall(key) or {}
+        decoded = {}
+        for k, v in raw_vault.items():
+            try:
+                decoded[k] = json.loads(v)
+            except Exception:
+                decoded[k] = v
+
+        normalized = self._normalize_hormonal_vault(decoded)
+
+        # Self-heal any legacy shape in hot table and keep file mirror aligned.
+        if normalized != decoded:
+            self.set_hormonal_vault(normalized)
+            return normalized
+
+        self._save_vault_to_file(normalized)
+        return normalized
 
     def set_hormonal_vault(self, vault_data: dict):
-        """Piece 115: Atomic Vault Write to Redis HASH."""
+        """
+        Piece 115: Atomic Vault Write to Redis HASH.
+        Normalizes schema, replaces hash atomically, and mirrors to file.
+        """
+        normalized = self._normalize_hormonal_vault(vault_data)
         redis_conn = self.get_redis_connection()
         key = "mammon:hormonal_vault"
-        
-        # Serialize each top-level key (gold, silver, platinum, etc.) to JSON
+
+        payload = {k: json.dumps(v) for k, v in normalized.items()}
+
+        # Replace whole hash to prevent stale top-level keys from surviving.
         with redis_conn.pipeline() as pipe:
-            for k, v in vault_data.items():
-                pipe.hset(key, k, json.dumps(v))
+            pipe.delete(key)
+            if payload:
+                pipe.hset(key, mapping=payload)
             pipe.execute()
+
+        # File mirror for bootstrap and human inspection.
+        self._save_vault_to_file(normalized)
 
     def query(self, sql: str, params: tuple = (), transport: str = "duckdb"):
         """

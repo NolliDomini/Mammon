@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from sklearn.gaussian_process import GaussianProcessRegressor
 from sklearn.gaussian_process.kernels import Matern
 
-from Hippocampus.Archivist.librarian import Librarian
+from Hippocampus.Archivist.librarian import librarian
 from Hospital.Optimizer_loop.bounds import MINS, MAXS, normalize_weights
 
 # Canonical 23-D parameter key order (matches bounds.py)
@@ -50,6 +50,7 @@ class PituitaryGland:
         self.gold_path = self.params_root / "gold_params.json"
         self.bronze_path = self.params_root / "bronze_list.json"
         self.vault_path = self.root.parent / "Hippocampus" / "hormonal_vault.json"
+        self.librarian = librarian
 
         # Database connection for Silver mining
         self.synapse_db = self.root.parent / "Hippocampus" / "Archivist" / "Ecosystem_Synapse.db"
@@ -85,42 +86,67 @@ class PituitaryGland:
             import traceback
             traceback.print_exc()
 
+    @staticmethod
+    def _extract_fitness(entry: Dict[str, Any], default: float = 0.5) -> float:
+        if not isinstance(entry, dict):
+            return float(default)
+        for key in ("fitness_snapshot", "fitness_estimate", "fitness"):
+            try:
+                if key in entry:
+                    return float(entry.get(key))
+            except Exception:
+                continue
+        return float(default)
+
     def _run_gp_mutation(self):
         """
         Core GP mutation logic.
         Loads Platinum/Gold/Silver, fits a Gaussian Process, and derives new Gold.
         """
-        # 1. LOAD THE THREE TIERS
-        vault = self._load_json(self.vault_path)
-        plat_raw = self._load_json(self.platinum_path)
+        # 1. LOAD NORMALIZED VAULT TIERS FROM HOT TABLE
+        vault = self.librarian.get_hormonal_vault()
+        if not isinstance(vault, dict):
+            vault = {}
 
-        tiers = []  # List of (name, vector, fitness)
+        tiers = []  # List[(name, vector, fitness)]
 
-        # Gold (from vault)
-        gold_entry = vault.get("gold", {})
-        if gold_entry and "params" in gold_entry:
-            vec = self._params_to_vector(gold_entry["params"])
-            if vec is not None:
-                fitness = float(gold_entry.get("fitness_snapshot", 0.5))
-                tiers.append(("Gold", vec, fitness))
-                print(f"   [GP] Gold loaded: fitness={fitness:.4f}")
+        def add_tier(name: str, entry: Any, default_fitness: float = 0.5):
+            if not isinstance(entry, dict):
+                return
+            params = entry.get("params")
+            if not isinstance(params, dict):
+                return
+            vec = self._params_to_vector(params)
+            if vec is None:
+                return
+            fitness = self._extract_fitness(entry, default_fitness)
+            tiers.append((name, vec, fitness))
+            print(f"   [GP] {name} loaded: fitness={fitness:.4f}")
 
-        # Silver (from vault)
-        silver_entry = vault.get("silver")
-        if silver_entry and isinstance(silver_entry, dict) and "params" in silver_entry:
-            vec = self._params_to_vector(silver_entry["params"])
-            if vec is not None:
-                fitness = float(silver_entry.get("fitness_estimate", 0.5))
-                tiers.append(("Silver", vec, fitness))
-                print(f"   [GP] Silver loaded: fitness={fitness:.4f}")
+        add_tier("Gold", vault.get("gold"), default_fitness=0.50)
 
-        # Platinum (from platinum_params.json)
-        if plat_raw and "params" in plat_raw:
-            vec = self._params_to_vector(plat_raw["params"])
-            if vec is not None:
-                fitness = float(plat_raw.get("fitness_estimate", 0.5))
-                tiers.append(("Platinum", vec, fitness))
-                print(f"   [GP] Platinum loaded: fitness={fitness:.4f}")
+        silver_entries = vault.get("silver", [])
+        if isinstance(silver_entries, dict):
+            silver_entries = [silver_entries]
+        if not isinstance(silver_entries, list):
+            silver_entries = []
+        for i, silver_entry in enumerate(silver_entries):
+            add_tier(f"Silver[{i}]", silver_entry, default_fitness=0.45)
+
+        add_tier("Platinum", vault.get("platinum"), default_fitness=0.55)
+        add_tier("Titanium", vault.get("titanium"), default_fitness=0.50)
+
+        bronze_entries = vault.get("bronze_history", [])
+        if isinstance(bronze_entries, dict):
+            bronze_entries = [bronze_entries]
+        if isinstance(bronze_entries, list):
+            for i, bronze_entry in enumerate(bronze_entries[:5]):
+                add_tier(f"Bronze[{i}]", bronze_entry, default_fitness=0.35)
+
+        # Legacy fallback: include file-based platinum if vault lacks enough points.
+        if len(tiers) < 2:
+            plat_raw = self._load_json(self.platinum_path)
+            add_tier("PlatinumFile", plat_raw, default_fitness=0.55)
 
         # 2. GUARD: Need at least 2 data points
         if len(tiers) < 2:
@@ -176,19 +202,20 @@ class PituitaryGland:
 
         # 9. CORONATION: Install new Gold, demote old
         old_gold = vault.get("gold", {})
-        old_fitness = float(old_gold.get("fitness_snapshot", 0.0))
+        old_fitness = self._extract_fitness(old_gold, 0.0)
 
         print(f"   [GP] Old Gold fitness={old_fitness:.4f} -> New GP-derived fitness={best_fitness:.4f}")
 
         # Demote old Gold to bronze_history
-        if old_gold and "params" in old_gold:
-            old_gold["demoted_at"] = time.strftime("%Y-%m-%dT%H:%M:%S")
-            old_gold["demotion_reason"] = "gp_mutation"
+        if isinstance(old_gold, dict) and "params" in old_gold:
+            demoted = dict(old_gold)
+            demoted["demoted_at"] = time.strftime("%Y-%m-%dT%H:%M:%S")
+            demoted["demotion_reason"] = "gp_mutation"
             bronze = vault.get("bronze_history", [])
             if not isinstance(bronze, list):
                 bronze = []
-            bronze.insert(0, old_gold)
-            vault["bronze_history"] = bronze[:10]  # Rolling 10
+            bronze.insert(0, demoted)
+            vault["bronze_history"] = bronze[:50]  # Rolling archive
 
         # Install new Gold
         vault["gold"] = {
@@ -200,14 +227,32 @@ class PituitaryGland:
             "training_tiers": tier_names
         }
 
-        # Clear Silver (consumed by GP)
-        vault["silver"] = None
+        # Clear Silver (consumed by GP) and keep aliases aligned.
+        vault["silver"] = []
+        vault["bronze"] = vault.get("bronze_history", [])
 
         # Update meta
-        vault["meta"]["last_metabolism_ts"] = time.strftime("%Y-%m-%dT%H:%M:%S")
+        meta = vault.get("meta", {})
+        if not isinstance(meta, dict):
+            meta = {}
+        meta["last_metabolism_ts"] = time.strftime("%Y-%m-%dT%H:%M:%S")
+        meta["last_gp_mutation_ts"] = meta["last_metabolism_ts"]
+        meta["last_gp_training_tier_count"] = len(tier_names)
+        vault["meta"] = meta
 
         # 10. PERSIST
-        self._save_json(self.vault_path, vault)
+        self.librarian.set_hormonal_vault(vault)
+        try:
+            self.librarian.record_param_set(
+                vault["gold"]["id"],
+                "GOLD",
+                new_params,
+                "GLOBAL",
+                best_fitness,
+                "PituitaryGP",
+            )
+        except Exception as e:
+            print(f"   [GP_WARN] Param DB write skipped: {e}")
 
         print(f"[PITUITARY] GROWTH HORMONE SECRETED — New Gold: {vault['gold']['id']}")
         print(f"   Derived from: {tier_names} | Predicted fitness: {best_fitness:.4f}")
@@ -254,8 +299,9 @@ class PituitaryGland:
         Attempts to update the Platinum standard. 
         If successful, the old Platinum is retired to Bronze.
         """
-        current_plat = self._load_json(self.platinum_path)
-        current_fitness = current_plat.get("fitness_estimate", 0.0)
+        vault = self.librarian.get_hormonal_vault()
+        current_plat = vault.get("platinum", {})
+        current_fitness = self._extract_fitness(current_plat, 0.0)
         
         if fitness > current_fitness:
             print(f"[PITUITARY] New Platinum Standard! ({fitness:.4f} > {current_fitness:.4f})")
@@ -265,14 +311,21 @@ class PituitaryGland:
                 self._retire_to_bronze(current_plat, reason="dethroned_by_platinum")
             
             # Mint new Platinum
+            param_id = f"forge_{regime_id}_{int(time.time())}"
             new_entry = {
-                "id": f"forge_{regime_id}_{int(time.time())}",
+                "id": param_id,
                 "params": new_params,
                 "fitness_estimate": fitness,
                 "minted_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
                 "origin": "VolumeFurnace"
             }
-            self._save_json(self.platinum_path, new_entry)
+            vault = self.librarian.get_hormonal_vault()
+            vault["platinum"] = new_entry
+            self.librarian.set_hormonal_vault(vault)
+            try:
+                self.librarian.record_param_set(param_id, "PLATINUM", new_params, regime_id, fitness, "VolumeFurnace")
+            except Exception as e:
+                print(f"[PITUITARY_WARN] Platinum Param DB write skipped: {e}")
             return True
             
         return False
@@ -282,29 +335,33 @@ class PituitaryGland:
         Returns the single best parameter set available.
         Order of Precedence: Platinum > Gold > Silver (Best)
         """
-        # 1. Try Platinum
-        plat = self._load_json(self.platinum_path)
-        if plat and "params" in plat:
+        vault = self.librarian.get_hormonal_vault()
+
+        # 1. Platinum
+        plat = vault.get("platinum", {})
+        if isinstance(plat, dict) and isinstance(plat.get("params"), dict):
             return plat["params"]
-            
-        # 2. Try Gold
-        gold = self._load_json(self.gold_path)
-        if gold and "params" in gold:
+
+        # 2. Gold
+        gold = vault.get("gold", {})
+        if isinstance(gold, dict) and isinstance(gold.get("params"), dict):
             return gold["params"]
-            
-        # 3. Mine Silver
-        silver = self._mine_silver()
-        if silver:
-            return silver["params"]
-            
-        return {} # Fallback to defaults
+
+        # 3. Silver (highest fitness first due to vault normalization)
+        silver = vault.get("silver", [])
+        if isinstance(silver, list) and silver:
+            best = silver[0]
+            if isinstance(best, dict) and isinstance(best.get("params"), dict):
+                return best["params"]
+
+        return {}  # Fallback to defaults
 
     def _mine_silver(self) -> Optional[Dict[str, Any]]:
         """Queries Synapse DB for the highest conviction winning ticket."""
         if not self.synapse_db.exists(): return None
         
         try:
-            with Librarian.get_connection(self.synapse_db) as conn:
+            with sqlite3.connect(str(self.synapse_db)) as conn:
                 conn.row_factory = sqlite3.Row
                 cursor = conn.execute("""
                     SELECT * FROM synapse_mint 
@@ -319,18 +376,23 @@ class PituitaryGland:
         return None
 
     def _retire_to_bronze(self, entry: Dict[str, Any], reason: str):
-        """Moves an entry to the bronze list."""
-        bronze_list = self._load_json(self.bronze_path)
-        if not isinstance(bronze_list, list): bronze_list = []
-        
-        entry["retired_at"] = time.strftime("%Y-%m-%dT%H:%M:%S")
-        entry["retirement_reason"] = reason
-        
-        bronze_list.append(entry)
+        """Moves an entry to the bronze lineage in the hot-table vault."""
+        vault = self.librarian.get_hormonal_vault()
+        bronze_list = vault.get("bronze_history", [])
+        if not isinstance(bronze_list, list):
+            bronze_list = []
+
+        retired = dict(entry) if isinstance(entry, dict) else {}
+        retired["retired_at"] = time.strftime("%Y-%m-%dT%H:%M:%S")
+        retired["retirement_reason"] = reason
+
+        bronze_list.append(retired)
         if len(bronze_list) > 100:
             bronze_list = bronze_list[-100:]
-            
-        self._save_json(self.bronze_path, bronze_list)
+
+        vault["bronze_history"] = bronze_list
+        vault["bronze"] = bronze_list
+        self.librarian.set_hormonal_vault(vault)
 
     def _load_json(self, path: Path) -> Any:
         if not path.exists(): return {}

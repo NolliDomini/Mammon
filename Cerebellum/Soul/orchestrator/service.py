@@ -12,6 +12,7 @@ from Cerebellum.Soul.brain_frame import BrainFrame
 from Left_Hemisphere.Monte_Carlo.quantized_geometric_walk import QuantizedGeometricWalk
 from Hospital.Optimizer_loop.volume_furnace_orchestrator import VolumeFurnaceOrchestrator
 from Hippocampus.Archivist.optimizer_librarian import OptimizerLibrarian
+from Hippocampus.Archivist.librarian import librarian
 from Hippocampus.amygdala import Amygdala
 from Hippocampus.pineal import Pineal
 from Pituitary.gland import PituitaryGland
@@ -47,18 +48,19 @@ class Orchestrator:
         # V3.1 BRAINTICK: Clean ward on boot
         WardManager().janitor_sweep()
         
-        # Load Hormonal Vault (Source of Truth)
+        # Hot-table source of truth with file mirror fallback.
         self.vault_path = Path(__file__).resolve().parents[3] / "Hippocampus" / "hormonal_vault.json"
-        with open(self.vault_path, "r") as f:
-            self.vault = json.load(f)
+        self.librarian = librarian
+        self.vault = self._load_vault()
         
         # Mirror Gold params and mode to the BrainFrame (Soul-Driven Canvas)
         self.frame = BrainFrame()
-        self.frame.standards = self.vault["gold"]["params"]
+        self.frame.standards = self.vault.get("gold", {}).get("params", {})
         self.frame.market.execution_mode = str(self.config.get("execution_mode", "DRY_RUN")).upper()
         
-        print(f"[SOUL] {self.run_id} Hormonal Vault Active: {self.vault_path}")
-        print(f"[SOUL] {self.run_id} Gold Mirror Active (ID: {self.vault['gold']['id']})")
+        print(f"[SOUL] {self.run_id} Hormonal Vault Source: hot-table (mammon:hormonal_vault)")
+        print(f"[SOUL] {self.run_id} Hormonal Vault Mirror: {self.vault_path}")
+        print(f"[SOUL] {self.run_id} Gold Mirror Active (ID: {self.vault.get('gold', {}).get('id', 'UNK')})")
         print(f"[SOUL] {self.run_id} Mode Canvas: {self.frame.market.execution_mode}")
         
         # Supporting Engines
@@ -419,8 +421,7 @@ class Orchestrator:
         Reloads Gold parameters if the vault ID has changed.
         """
         try:
-            with open(self.vault_path, "r") as f:
-                new_vault = json.load(f)
+            new_vault = self._load_vault()
             
             new_id = new_vault.get("gold", {}).get("id")
             old_id = self.vault.get("gold", {}).get("id")
@@ -452,3 +453,39 @@ class Orchestrator:
                 print(f"[SOUL] Hot-reload complete for Gold Mirror ID: {new_id}")
         except Exception as e:
             print(f"[SOUL_ERROR] Hot-reload failed: {e}")
+
+    def _load_vault(self) -> Dict[str, Any]:
+        """
+        Runtime source of truth is the Librarian hot table.
+        Falls back to file mirror only if hot-table read is unavailable.
+        """
+        try:
+            vault = self.librarian.get_hormonal_vault()
+            if isinstance(vault, dict):
+                return vault
+        except Exception as e:
+            print(f"[SOUL_WARN] Hot-table vault read failed: {e}")
+
+        try:
+            with open(self.vault_path, "r") as f:
+                fallback = json.load(f)
+            if isinstance(fallback, dict):
+                print("[SOUL_WARN] Using file-mirror vault fallback.")
+                return fallback
+        except Exception as e:
+            print(f"[SOUL_ERROR] File-mirror vault fallback failed: {e}")
+
+        return {
+            "gold": {
+                "id": "UNKNOWN",
+                "params": {},
+                "fitness_snapshot": 0.0,
+                "origin": "bootstrap_fallback",
+            },
+            "silver": [],
+            "platinum": None,
+            "titanium": None,
+            "bronze_history": [],
+            "diamond_rails": {"bounds": {}},
+            "meta": {},
+        }

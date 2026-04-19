@@ -380,11 +380,13 @@
     // ── Config ──
     const API_BASE = '';
     const apiToken = window.MAMMON_TOKEN || '';
+    const stopOnCloseEnabled = Boolean(window.MAMMON_STOP_ON_CLOSE);
     let evtSource = null;
     let treasuryPollTimer = null;
     let staleInterval = null;
     let timeSincePulse = 0;
     let engineActive = false;
+    let stopBeaconSent = false;
 
     // ── Chart State ──
     let chart = null;
@@ -563,14 +565,36 @@
           const event = JSON.parse(e.data);
           if (event.type === 'pulse' && event.data) {
             applyPulse(event.data);
-            const verdict = n(event.data.approved) ? 'APPROVED' : 'REJECTED';
-            const why = String(event.data.reason || 'WAITING');
-            addLog(`${event.data.pulse_type} | ${event.data.symbol} | $${n(event.data.price).toFixed(2)} | ${verdict} | ${why}`);
+            const pulseType = String(event.data.pulse_type || 'PULSE').toUpperCase();
+            addLog(`${pulseType} | $${n(event.data.price).toFixed(2)}`);
           } else if (event.type === 'engine') {
-            setStatus(event.data.msg || 'ENGINE_EVENT');
-            addLog(event.data.msg || 'Engine event');
+            const lifecycle = String(event.data.lifecycle || '').toUpperCase();
+            const exitKind = String(event.data.exit_kind || '');
+            const exitSource = String(event.data.exit_source || '');
+            const exitReason = String(event.data.exit_reason || '');
+            const exitDetail = String(event.data.exit_detail || '');
+            if (lifecycle === 'STOPPED') {
+              engineActive = false;
+              id('startBtn').textContent = 'START DRY RUN';
+              id('startBtn').disabled = false;
+              stopTreasuryPoll();
+              stopStaleTimer();
+              setStatus(exitKind ? `STOPPED_${exitKind}` : 'STOPPED');
+              addLog(event.data.msg || 'Engine stopped', exitKind === 'CRASH' ? 'error' : undefined);
+              if (exitKind) addLog(`EXIT: ${exitKind} | source=${exitSource || '-'} | reason=${exitReason || '-'}`, exitKind === 'CRASH' ? 'error' : undefined);
+              if (exitDetail) addLog(`DETAIL: ${exitDetail}`, exitKind === 'CRASH' ? 'error' : undefined);
+            } else {
+              setStatus(event.data.msg || 'ENGINE_EVENT');
+              addLog(event.data.msg || 'Engine event');
+            }
+          } else if (event.type === 'furnace') {
+            const decision = String(event.data.decision || '').toUpperCase();
+            const level = decision === 'PIPELINE_ERROR' ? 'error' : undefined;
+            addLog(`FURNACE | ${decision || 'UNKNOWN'}`, level);
           } else if (event.type === 'error') {
-            addLog(`ERROR: ${event.data.msg || event.data.symbol || 'unknown'}`, 'error');
+            const runId = String(event.data.run_id || '');
+            const exType = String(event.data.exception_type || '');
+            addLog(`ERROR: ${event.data.msg || event.data.symbol || 'unknown'}${runId ? ` | run=${runId}` : ''}${exType ? ` | ${exType}` : ''}`, 'error');
           } else if (event.type === 'system') {
             setStatus(event.data.msg || 'SYSTEM');
             addLog(`SYSTEM: ${event.data.msg}`, 'error');
@@ -667,6 +691,7 @@
         engineActive = true;
         setStatus('DRY_RUN_ACTIVE');
         addLog(`Engine started: ${symbol} in DRY_RUN`);
+        if (d.run_id) addLog(`Run ID: ${d.run_id}`);
         initChart();
         connectSSE();
         startTreasuryPoll();
@@ -679,7 +704,15 @@
     }
 
     async function stopEngine() {
-      try { await fetch(`${API_BASE}/api/stop`, { method: 'POST', headers: authHeaders() }); } catch (e) { /* silent */ }
+      try {
+        const res = await fetch(`${API_BASE}/api/stop`, {
+          method: 'POST',
+          headers: authHeaders(),
+          body: JSON.stringify({ source: 'ui', reason: 'manual_button', detail: 'dashboard_stop_button' }),
+        });
+        const d = await res.json().catch(() => ({}));
+        if (d && d.reason) addLog(`Stop requested: ${d.reason}`);
+      } catch (e) { /* silent */ }
       engineActive = false;
       disconnectSSE();
       stopTreasuryPoll();
@@ -722,15 +755,28 @@
           return;
         }
         engineActive = false;
-        setStatus('READY');
+        id('startBtn').textContent = 'START DRY RUN';
+        id('startBtn').disabled = false;
+        const lastExit = String(s.last_exit_kind || '');
+        if (lastExit && lastExit !== 'NEVER_STARTED') {
+          setStatus(`LAST_EXIT_${lastExit}`);
+          addLog(`Last exit: ${lastExit} | ${String(s.last_exit_source || '-')} | ${String(s.last_exit_reason || '-')}`, lastExit === 'CRASH' ? 'error' : undefined);
+          const crashDetail = String(s.last_exception_msg || s.last_exit_detail || '');
+          if (lastExit === 'CRASH' && crashDetail) {
+            addLog(`Last crash detail: ${crashDetail}`, 'error');
+          }
+        } else {
+          setStatus('READY');
+        }
       } catch (e) {
         addLog('State hydrate failed', 'error');
       }
     }
 
     function stopEngineOnWindowClose() {
-      if (!engineActive || !apiToken) return;
-      const stopUrl = `${API_BASE}/api/stop?token=${encodeURIComponent(apiToken)}`;
+      if (!stopOnCloseEnabled || stopBeaconSent || !engineActive || !apiToken) return;
+      stopBeaconSent = true;
+      const stopUrl = `${API_BASE}/api/stop?token=${encodeURIComponent(apiToken)}&source=ui_beforeunload&reason=window_close&detail=window_lifecycle`;
       try {
         if (navigator.sendBeacon) {
           navigator.sendBeacon(stopUrl, '');
@@ -753,8 +799,12 @@
       }
       initChart();
       await hydrateFromCurrentState();
-      window.addEventListener('pagehide', stopEngineOnWindowClose);
-      window.addEventListener('beforeunload', stopEngineOnWindowClose);
+      if (stopOnCloseEnabled) {
+        addLog('Auto-stop on tab close: ON');
+        window.addEventListener('beforeunload', stopEngineOnWindowClose);
+      } else {
+        addLog('Auto-stop on tab close: OFF');
+      }
     })();
   </script>
 </body>
