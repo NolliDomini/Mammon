@@ -76,3 +76,8 @@ What it verifies:
 - Diamond determines whether staging was consumed.
 - Pineal decides whether staging is wiped after that signal.
 - Pituitary consumes parameter outputs but does not own staging wipe authority.
+
+## Trading Gate Clarification (2026-04-19)
+- Pineal is not a trade approval or execution gate.
+- Changing Pineal retention policy does not change Gatekeeper thresholds or Brain Stem entry logic.
+- Any `PINEAL_ERROR` log lines indicate hygiene/finalization issues, not trade-policy overrides.

@@ -24,3 +24,9 @@ Core implementation:
  - focused refine + entropy collapse burst
  - Bayesian ranking + diagnostics
  - promotion gate with reason-coded fail-safe decisions
+
+Operational boundary (2026-04-19):
+- Optimizer/Furnace runs candidate scoring and promotion decisions.
+- It does **not** directly execute trades.
+- It does **not** directly bypass Medulla/Brain Stem gates.
+- Gold parameter changes affect live trading only after vault write/coronation and Soul hot-reload.

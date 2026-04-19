@@ -74,6 +74,18 @@ Mammon does not "loop"; it **pulses**. Every 5-minute window is divided into thr
 2.  **ACTION (+4.5m)**: Execution phase. Intents are armed and the Gatekeeper evaluates policy.
 3.  **MINT (Rollover)**: Finalization phase. Trades are fired, state is persisted, and the "Synapse Ticket" is minted to the database.
 
+### Runtime Note (2026-04-19)
+Current DRY_RUN operations use a scalper-oriented Gold profile:
+- `gold.id = scalp_v1_20260419`
+- lowered gate thresholds (`gatekeeper_min_monte=0.30`, `gatekeeper_min_council=0.44`)
+- faster structure window (`active_gear=3`)
+- conservative execution caps (`max_notional_per_order`, `max_open_positions`, `max_daily_realized_loss`)
+
+Execution authority boundaries remain strict:
+- **Gatekeeper + Brain Stem** decide trade eligibility and execution lifecycle.
+- **Pineal** is cleanup/finalization only (not a trading gate).
+- **Volume Furnace** runs optimizer cadence and promotion telemetry; it does not directly place orders.
+
 ---
 
 ## 🛡️ IV. LEGES MAMMON (THE LAWS)

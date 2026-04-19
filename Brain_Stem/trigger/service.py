@@ -16,14 +16,14 @@ class Trigger:
     Brain Stem: The Trigger Train (V3.3 Gated Architecture).
     
     GATES (Must be OPEN):
-      1. Risk Gate (Small Monte): Score > 0.5 (Safe)
-      2. Valuation Gate (StdDev): Price < Mean (Undervalued)
+      1. Risk Gate (Small Monte): Score >= configured floor (Safe)
+      2. Valuation Cap (StdDev): Entry z-score <= configured cap
       
     TRIGGER (Must FIRE):
       3. Engine Conviction: Prior > 0.5 (Turtle + Council)
       
     LONG ONLY:
-      BUY  = Risk > 0.5  AND  Price < Mean  AND  Prior > 0.5
+      BUY  = Risk >= MinRisk  AND  EntryZ <= EntryCap  AND  Prior > 0.5
       SELL = (Price > Mean AND Diverging)  OR  Hard Bands (Stop/Take)
     """
 
@@ -41,7 +41,7 @@ class Trigger:
         self.rng = np.random.default_rng()
         self.treasury = None
         try:
-            from Medulla.treasury_gland import TreasuryGland
+            from Medulla.treasury.gland import TreasuryGland
             self.treasury = TreasuryGland(mode=self.execution_mode)
         except Exception as e:
             print(f"[BRAIN STEM] Treasury unavailable: {e}")
@@ -74,7 +74,7 @@ class Trigger:
                     self.execution_adapter = "mock"
                     self.client = None
             try:
-                from Medulla.treasury_gland import TreasuryGland
+                from Medulla.treasury.gland import TreasuryGland
                 self.treasury = TreasuryGland(mode=mode_u)
             except Exception as e:
                 print(f"[BRAIN STEM] Treasury rebind failed for {mode_u}: {e}")
@@ -410,8 +410,12 @@ class Trigger:
         # ---- LOGIC ----
         if self.position is None:
             # ENTRY LOGIC
-            is_safe = risk > 0.5
-            is_undervalued = price < val_data["mean"]
+            min_risk = float(self.config.get("gatekeeper_min_monte", 0.5))
+            is_safe = risk >= min_risk
+            sigma = max(val_data.get("sigma", 0.0), 1e-9)
+            entry_z = (price - val_data["mean"]) / sigma
+            entry_max_z = float(self.config.get("brain_stem_entry_max_z", 0.8))
+            is_entry_within_z_cap = entry_z <= entry_max_z
             
             # V3.3: Council is a fail-safe only (Environmental Confidence)
             min_council = float(self.config.get("gatekeeper_min_council", 0.5))
@@ -442,12 +446,10 @@ class Trigger:
                             f"RISK_CAP_DAILY_LOSS (net={today_net:.2f} <= -{abs(max_daily_realized_loss):.2f})"
                         )
             
-            if is_safe and is_undervalued and is_conviction and is_environment_safe and cap_reason is None:
+            if is_safe and is_entry_within_z_cap and is_conviction and is_environment_safe and cap_reason is None:
                 print(f"   [BRAIN STEM] BUY {symbol} @ {price:.4f} "
-                      f"(Risk={risk:.2f}, Val={price-val_data['mean']:.2f}, Prior={prior:.2f})")
+                      f"(Risk={risk:.2f}, Z={entry_z:.2f}/{entry_max_z:.2f}, Prior={prior:.2f})")
                 
-                sigma = max(val_data.get("sigma", 0.0), 1e-9)
-                entry_z = (price - val_data["mean"]) / sigma
                 intent_id = f"{symbol}:{int(time.time() * 1000)}:{uuid.uuid4().hex[:8]}"
                 self.pending_entry = {
                     "intent_id": intent_id,
@@ -490,8 +492,8 @@ class Trigger:
                 )
             else:
                 reasons = []
-                if not is_safe: reasons.append(f"Risk({risk:.2f})<=0.5")
-                if not is_undervalued: reasons.append("Overvalued")
+                if not is_safe: reasons.append(f"Risk({risk:.2f})<{min_risk:.2f}")
+                if not is_entry_within_z_cap: reasons.append(f"Overextended(z={entry_z:.2f}>{entry_max_z:.2f})")
                 if not is_conviction: reasons.append(f"Prior({prior:.2f})<=0.5")
                 if not is_environment_safe: reasons.append("CouncilFailSafe")
                 if cap_reason: reasons.append(cap_reason)

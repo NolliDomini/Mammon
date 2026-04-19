@@ -33,7 +33,7 @@ Core cycle in `_process_frame(...)`:
 2. run right hemisphere structure step
 3. run council environment step
 4. run left hemisphere readiness/seed path
-5. run optimizer cadence hook
+5. run optimizer cadence hook (Volume Furnace)
 6. run corpus + gatekeeper + brain stem when signal conditions are met
 7. mint runtime synapse ticket through Amygdala
 8. run Pineal/Pituitary maintenance hooks
@@ -52,6 +52,12 @@ Core cycle in `_process_frame(...)`:
 - **Hot-Reload (Piece 14):** Soul checks for vault mutations on every MINT pulse and hot-reloads all lobe parameters if a new standard is coronated.
 - On `register_lobe` (and hot-reload), Gold params are injected into lobe configs.
 - Left hemisphere receives explicit noise/lane-weight injections for runtime consistency.
+- Gatekeeper and Brain Stem consume those injected Gold params during live decisions.
+
+## Furnace Boundary
+- Furnace execution is part of cadence and telemetry, not direct trade authorization.
+- Trade approval remains `Gatekeeper.decide(...)`; trade arm/fire lifecycle remains Brain Stem + Treasury.
+- Furnace outcomes can influence trading only after a Gold mutation is written to vault and Soul hot-reloads.
 
 ## Operational Invariants
 - One shared `BrainFrame` is the source of truth inside the cycle.

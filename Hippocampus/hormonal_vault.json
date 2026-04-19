@@ -23,9 +23,9 @@
     "last_search_ts": "2026-02-15T08:10:00"
   },
   "gold": {
-    "id": "clean_slate_20260215",
+    "id": "scalp_v1_20260419",
     "params": {
-      "active_gear": 5,
+      "active_gear": 3,
       "monte_noise_scalar": 0.30,
       "monte_w_worst": 0.20,
       "monte_w_neutral": 0.35,
@@ -34,8 +34,10 @@
       "council_w_adx": 0.40,
       "council_w_vol": 0.25,
       "council_w_vwap": 0.20,
-      "gatekeeper_min_monte": 0.50,
-      "gatekeeper_min_council": 0.50,
+      "gatekeeper_min_monte": 0.30,
+      "gatekeeper_min_council": 0.44,
+      "gatekeeper_threshold_cmp": ">=",
+      "gatekeeper_sizing_mult": 0.01,
       "callosum_w_monte": 0.35,
       "callosum_w_right": 0.30,
       "callosum_w_adx": 0.20,
@@ -46,6 +48,12 @@
       "brain_stem_noise": 0.05,
       "brain_stem_sigma": 0.10,
       "brain_stem_bias": 0.0,
+      "brain_stem_entry_max_z": 0.8,
+      "brain_stem_stale_price_cancel_bps": 25.0,
+      "brain_stem_mean_dev_cancel_sigma": 2.0,
+      "max_notional_per_order": 1000.0,
+      "max_open_positions": 1,
+      "max_daily_realized_loss": 500.0,
       "stop_loss_mult": 1.5,
       "breakeven_mult": 1.2
     },
