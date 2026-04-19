@@ -15,7 +15,12 @@ from Hippocampus.Archivist.optimizer_librarian import OptimizerLibrarian
 from Hippocampus.amygdala import Amygdala
 from Hippocampus.pineal import Pineal
 from Pituitary.gland import PituitaryGland
-from Hospital.Memory_care.ward_manager import WardManager
+from Cerebellum.Soul.utils.ward_manager import WardManager
+
+try:
+    from Hippocampus.crawler import ParamCrawler
+except Exception:
+    ParamCrawler = None
 
 @dataclass
 class LobeMetrics:
@@ -63,12 +68,29 @@ class Orchestrator:
             simulation_mode=False,
             execution_mode=str(self.config.get("execution_mode", "DRY_RUN")).upper(),
         )
-        self.amygdala = Amygdala()
-        self.pineal = Pineal()
+        amygdala_config = {
+            "synapse_persist_pulse_types": self.config.get("synapse_persist_pulse_types", ["MINT"]),
+        }
+        for key in ("synapse_db_path_primary", "synapse_db_path_backtest"):
+            if key in self.config and self.config.get(key):
+                amygdala_config[key] = self.config.get(key)
+        self.amygdala = Amygdala(config=amygdala_config)
+        self.pineal = Pineal(
+            config={
+                "synapse_preserve_pulse_types": amygdala_config.get("synapse_persist_pulse_types", ["MINT"])
+            }
+        )
         self.pituitary = PituitaryGland()
+        self.crawler = None
+        if ParamCrawler is not None:
+            try:
+                self.crawler = ParamCrawler()
+            except Exception as ce:
+                print(f"[SOUL_WARN] Crawler unavailable: {ce}")
         self.opt_lib = OptimizerLibrarian()
         self.active_strikes: List[Dict[str, Any]] = [] 
-        self.last_action_ts: Optional[float] = None # V6: 30s Kill Window
+        self.last_action_ts: Optional[float] = None  # legacy wall-clock anchor
+        self.last_action_market_ts: Optional[pd.Timestamp] = None
 
         # V6: Optical Tract Subscription
         self.optical_tract = optical_tract
@@ -175,14 +197,33 @@ class Orchestrator:
             # 1b. Timing Guard Evaluation (Piece 16)
             timing_inhibited = False
             if pulse_type == "MINT":
-                if self.last_action_ts is not None:
-                    elapsed = time.time() - self.last_action_ts
-                    if elapsed > 30.0:
+                max_market_delay = float(self.config.get("action_to_mint_max_market_sec", 90.0))
+                max_wall_delay = float(self.config.get("action_to_mint_max_wall_sec", 90.0))
+                action_market_ts = getattr(self, "last_action_market_ts", None)
+                mint_market_ts = pd.to_datetime(self.frame.market.ts, utc=True, errors="coerce")
+
+                if action_market_ts is not None and pd.notna(mint_market_ts):
+                    elapsed = float((mint_market_ts - action_market_ts).total_seconds())
+                    if elapsed > max_market_delay:
                         timing_inhibited = True
-                        print(f"[SOUL] TIMING_INHIBIT: MINT arrived too late ({elapsed:.1f}s > 30s)")
+                        print(
+                            f"[SOUL] TIMING_INHIBIT: MINT arrived too late "
+                            f"(pulse_dt={elapsed:.1f}s > {max_market_delay:.1f}s)"
+                        )
+                elif self.last_action_ts is not None:
+                    elapsed = time.time() - self.last_action_ts
+                    if elapsed > max_wall_delay:
+                        timing_inhibited = True
+                        print(
+                            f"[SOUL] TIMING_INHIBIT: MINT arrived too late "
+                            f"(wall_dt={elapsed:.1f}s > {max_wall_delay:.1f}s)"
+                        )
                 self.last_action_ts = None
+                self.last_action_market_ts = None
             elif pulse_type == "ACTION":
                 self.last_action_ts = time.time()
+                action_market_ts = pd.to_datetime(self.frame.market.ts, utc=True, errors="coerce")
+                self.last_action_market_ts = action_market_ts if pd.notna(action_market_ts) else None
 
             # 2. Right Hemisphere (Structure)
             self._run_lobe("Right_Hemisphere", self.lobes["Right_Hemisphere"].on_data_received, metrics, pulse_type, frame=self.frame)
@@ -254,7 +295,7 @@ class Orchestrator:
                     # We can use a trick here: monkeypatch frame.command.approved temporarily
                     # so Brain Stem rejects the execution.
                     self.frame.command.ready_to_fire = False
-                    self.frame.command.reason = "TIMING_CANCEL (MINT delayed > 30s)"
+                    self.frame.command.reason = f"TIMING_CANCEL (MINT delayed > {max_market_delay:.0f}s)"
                 
                 self._run_lobe(
                     "Brain_Stem",
@@ -273,6 +314,7 @@ class Orchestrator:
                 "pineal": "skipped",
                 "vault_reload": "skipped",
                 "pituitary": "skipped",
+                "crawler": "skipped",
             }
             try:
                 self.amygdala.mint_synapse_ticket(pulse_type, self.frame)
@@ -302,6 +344,13 @@ class Orchestrator:
             except Exception as e:
                 hook_status["pituitary"] = f"error:{type(e).__name__}"
                 print(f"[SOUL_WARN] Pituitary failed: {e}")
+            if pulse_type == "MINT" and getattr(self, "crawler", None) is not None:
+                try:
+                    self.crawler.crawl(pulse_type, self.frame)
+                    hook_status["crawler"] = "ok"
+                except Exception as e:
+                    hook_status["crawler"] = f"error:{type(e).__name__}"
+                    print(f"[SOUL_WARN] Crawler failed: {e}")
 
         except Exception as e:
             print(f"[SOUL_CRITICAL] Cycle failed: {e}")

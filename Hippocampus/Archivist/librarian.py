@@ -873,6 +873,12 @@ class MultiTransportLibrarian:
             # Fallback to direct write if Telepathy is not available (e.g. during early boot)
             self.write_direct(sql, params, transport=transport)
 
+    def write_only(self, sql: str, params: tuple = (), transport: str = "duckdb"):
+        """
+        Compatibility alias used by treasury and older lobe code paths.
+        """
+        self.write(sql, params, transport=transport)
+
     def write_direct(self, sql: str, params: tuple = (), transport: str = "duckdb"):
         """Bypass Telepathy and execute the write immediately."""
         if transport == "duckdb":
@@ -936,6 +942,9 @@ class Librarian:
     def write(self, sql: str, params: tuple = (), transport: str = "duckdb"):
         self.conn.execute(sql, params)
         self.conn.commit()
+
+    def write_only(self, sql: str, params: tuple = (), transport: str = "duckdb"):
+        self.write(sql, params, transport=transport)
 
     def read(self, sql: str, params: tuple = (), transport: str = "duckdb"):
         cur = self.conn.execute(sql, params)

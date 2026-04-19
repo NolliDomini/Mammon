@@ -1,8 +1,7 @@
 import sqlite3
 import time
 from pathlib import Path
-from typing import Dict, Any
-from Hippocampus.Archivist.librarian import Librarian
+from typing import Dict, Any, Set
 
 class Pineal:
     """
@@ -10,13 +9,22 @@ class Pineal:
     V4 SQL Hardened: Uses Librarian for robust pruning.
     
     Role:
-    - Purges all non-MINT rows from the Synapse silo.
+    - Purges rows outside configured pulse retention policy from the Synapse silo.
     - Enforces aggressive retention on short-term memory (simulations, walks).
     - Preserves MINT synapse tickets (complete engine state) for 90 days.
     - Secrete Melatonin: The cleanup signal.
     """
-    def __init__(self):
+    def __init__(self, config: Dict[str, Any] = None):
+        self.config = config or {}
         self.root = Path(__file__).resolve().parents[2]
+        preserve_pulses = self.config.get("synapse_preserve_pulse_types", ["MINT"])
+        if isinstance(preserve_pulses, str):
+            preserve_pulses = [preserve_pulses]
+        self.preserve_pulse_types: Set[str] = {
+            str(p).strip().upper() for p in (preserve_pulses or []) if str(p).strip()
+        }
+        if not self.preserve_pulse_types:
+            self.preserve_pulse_types = {"MINT"}
         
         self.memory_db = self.root / "Hippocampus" / "Archivist" / "Ecosystem_Memory.db"
         self.synapse_db = self.root / "Hippocampus" / "Archivist" / "Ecosystem_Synapse.db"
@@ -44,7 +52,7 @@ class Pineal:
     def secrete_melatonin(self, pulse_type: str = "MINT"):
         """
         The Sleep Cycle.
-        V3.2 STRICT: First purges all non-MINT rows, then prunes by age.
+        First purges rows outside retained pulse types, then prunes by age.
         """
         print("[PINEAL] Secreting Melatonin... (Strict Cleanup Cycle)")
         
@@ -96,8 +104,7 @@ class Pineal:
 
     def _purge_non_mint(self):
         """
-        V3.2 STRICT: Delete any row where pulse_type != 'MINT'.
-        SEED and ACTION data is ephemeral -- it never needed to be saved.
+        Delete any row whose pulse_type is outside configured retention policy.
         """
         # Purge from Synapse DB
         self._delete_non_mint(self.synapse_db, ["synapse_mint"])
@@ -110,7 +117,9 @@ class Pineal:
         if not db_path.exists():
             return
         try:
-            with Librarian.get_connection(db_path) as conn:
+            preserve = tuple(sorted(self.preserve_pulse_types))
+            placeholders = ",".join("?" for _ in preserve)
+            with sqlite3.connect(str(db_path)) as conn:
                 cursor = conn.cursor()
                 cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
                 existing = {row[0] for row in cursor.fetchall()}
@@ -119,10 +128,15 @@ class Pineal:
                     if table not in existing:
                         continue
                     try:
-                        cursor.execute(f"DELETE FROM {table} WHERE pulse_type IS NOT NULL AND pulse_type != 'MINT'")
+                        cursor.execute(
+                            f"DELETE FROM {table} "
+                            f"WHERE pulse_type IS NOT NULL "
+                            f"AND UPPER(COALESCE(pulse_type, '')) NOT IN ({placeholders})",
+                            preserve,
+                        )
                         deleted = cursor.rowcount
                         if deleted > 0:
-                            print(f"   [PINEAL] Purged {deleted} non-MINT rows from {table}")
+                            print(f"   [PINEAL] Purged {deleted} rows from {table} outside {preserve}")
                     except sqlite3.OperationalError:
                         pass  # Table may not have pulse_type column
                 conn.commit()
@@ -135,7 +149,7 @@ class Pineal:
             return
             
         try:
-            with Librarian.get_connection(db_path) as conn:
+            with sqlite3.connect(str(db_path)) as conn:
                 cursor = conn.cursor()
                 
                 cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")

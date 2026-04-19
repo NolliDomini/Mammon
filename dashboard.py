@@ -219,6 +219,8 @@ def _bar_to_dict(bar_obj, symbol):
 
 def _frame_to_event(frame, symbol, pulse_type, mode, bar_dict=None) -> dict:
     """Convert BrainFrame snapshot to a flat event dict for SSE."""
+    valuation_slot = getattr(frame, "valuation", None)
+    execution_slot = getattr(frame, "execution", None)
     event = {
         "symbol": symbol,
         "pulse_type": pulse_type,
@@ -248,12 +250,12 @@ def _frame_to_event(frame, symbol, pulse_type, mode, bar_dict=None) -> dict:
         "neutral_survival": round(getattr(frame.risk, "neutral_survival", 0), 4),
         "best_survival": round(getattr(frame.risk, "best_survival", 0), 4),
         # Valuation
-        "val_mean": round(getattr(frame.valuation, "mean", 0), 4),
-        "val_std_dev": round(getattr(frame.valuation, "std_dev", 0), 4),
-        "val_z_distance": round(getattr(frame.valuation, "z_distance", 0), 4),
+        "val_mean": round(getattr(valuation_slot, "mean", 0), 4),
+        "val_std_dev": round(getattr(valuation_slot, "std_dev", 0), 4),
+        "val_z_distance": round(getattr(valuation_slot, "z_distance", 0), 4),
         # Execution
-        "exec_expected_slippage_bps": round(getattr(frame.execution, "expected_slippage_bps", 0), 2),
-        "exec_total_cost_bps": round(getattr(frame.execution, "total_cost_bps", 0), 2),
+        "exec_expected_slippage_bps": round(getattr(execution_slot, "expected_slippage_bps", 0), 2),
+        "exec_total_cost_bps": round(getattr(execution_slot, "total_cost_bps", 0), 2),
         # Command
         "approved": getattr(frame.command, "approved", 0),
         "ready_to_fire": int(bool(getattr(frame.command, "ready_to_fire", False))),
@@ -296,6 +298,11 @@ def _engine_loop(symbols: list, is_crypto_map: dict):
             current_mode = state.mode
             trading_enabled = state.trading_enabled
 
+        persist_pulses_env = os.environ.get("MAMMON_DECISION_PERSIST_PULSES", "SEED,ACTION,MINT")
+        persist_pulses = [p.strip().upper() for p in persist_pulses_env.split(",") if p.strip()]
+        if not persist_pulses:
+            persist_pulses = ["MINT"]
+
         # Build Optical Tract → Soul subscription
         tract = OpticalTract()
 
@@ -304,6 +311,7 @@ def _engine_loop(symbols: list, is_crypto_map: dict):
             config={
                 "trading_enabled_provider": lambda: state.trading_enabled,
                 "execution_mode": current_mode,
+                "synapse_persist_pulse_types": persist_pulses,
             },
         )
 

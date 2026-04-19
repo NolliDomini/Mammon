@@ -43,6 +43,28 @@ class EnvironmentSlot:
     atr_avg: float = 0.0
     adx: float = 0.0
     volume_score: float = 0.0
+    bid_ask_bps: float = 0.0
+    spread_score: float = 0.0
+    spread_regime: str = "UNKNOWN"
+    spread_inputs: dict = field(default_factory=dict)
+
+
+@dataclass
+class ValuationSlot:
+    mean: float = 0.0
+    std_dev: float = 0.0
+    upper_band: float = 0.0
+    lower_band: float = 0.0
+    z_distance: float = 0.0
+    valuation_source: str = "NONE"
+
+
+@dataclass
+class ExecutionSlot:
+    expected_slippage_bps: float = 0.0
+    expected_fee_bps: float = 0.0
+    total_cost_bps: float = 0.0
+    cost_inputs: dict = field(default_factory=dict)
 
 @dataclass
 class CommandSlot:
@@ -51,6 +73,11 @@ class CommandSlot:
     final_confidence: float = 0.0
     sizing_mult: float = 0.0
     ready_to_fire: bool = False
+    qty: float = 0.0
+    notional: float = 0.0
+    size_reason: str = "NONE"
+    risk_used: float = 0.0
+    cost_adjusted_conviction: float = 0.0
 
 class BrainFrame:
     """
@@ -64,15 +91,31 @@ class BrainFrame:
         self.structure = StructureSlot()
         self.risk = RiskSlot()
         self.environment = EnvironmentSlot()
+        self.valuation = ValuationSlot()
+        self.execution = ExecutionSlot()
         self.command = CommandSlot()
         self.standards = {} # Mirrored Gold Params
 
     def reset_pulse(self, pulse_type: str):
         """Clears ephemeral decision state while preserving context."""
         self.market.pulse_type = pulse_type
+
+        self.environment.bid_ask_bps = 0.0
+        self.environment.spread_score = 0.0
+        self.environment.spread_regime = "UNKNOWN"
+        self.environment.spread_inputs = {}
+
+        self.valuation = ValuationSlot()
+        self.execution = ExecutionSlot()
+
         self.command.ready_to_fire = False
         self.command.approved = 0
         self.command.reason = "WAITING"
+        self.command.qty = 0.0
+        self.command.notional = 0.0
+        self.command.size_reason = "NONE"
+        self.command.risk_used = 0.0
+        self.command.cost_adjusted_conviction = 0.0
 
     def generate_machine_code(self) -> str:
         """
@@ -137,10 +180,25 @@ class BrainFrame:
             "atr_avg": self.environment.atr_avg,
             "adx": self.environment.adx,
             "volume_score": self.environment.volume_score,
+            "bid_ask_bps": self.environment.bid_ask_bps,
+            "spread_score": self.environment.spread_score,
+            "spread_regime": self.environment.spread_regime,
+            # Valuation (Brain Stem)
+            "val_mean": self.valuation.mean,
+            "val_std_dev": self.valuation.std_dev,
+            "val_z_distance": self.valuation.z_distance,
+            # Execution (Pre-trade friction)
+            "exec_expected_slippage_bps": self.execution.expected_slippage_bps,
+            "exec_total_cost_bps": self.execution.total_cost_bps,
             # Command (Gatekeeper)
             "decision": self.command.reason,
             "approved": self.command.approved,
             "final_confidence": self.command.final_confidence,
             "sizing_mult": self.command.sizing_mult,
-            "ready_to_fire": int(self.command.ready_to_fire)
+            "ready_to_fire": int(self.command.ready_to_fire),
+            "qty": self.command.qty,
+            "notional": self.command.notional,
+            "size_reason": self.command.size_reason,
+            "cost_adjusted_conviction": self.command.cost_adjusted_conviction,
+            "risk_used": self.command.risk_used,
         }

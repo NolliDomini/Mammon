@@ -384,6 +384,7 @@
     let treasuryPollTimer = null;
     let staleInterval = null;
     let timeSincePulse = 0;
+    let engineActive = false;
 
     // ── Chart State ──
     let chart = null;
@@ -562,7 +563,9 @@
           const event = JSON.parse(e.data);
           if (event.type === 'pulse' && event.data) {
             applyPulse(event.data);
-            addLog(`${event.data.pulse_type} | ${event.data.symbol} | $${n(event.data.price).toFixed(2)}`);
+            const verdict = n(event.data.approved) ? 'APPROVED' : 'REJECTED';
+            const why = String(event.data.reason || 'WAITING');
+            addLog(`${event.data.pulse_type} | ${event.data.symbol} | $${n(event.data.price).toFixed(2)} | ${verdict} | ${why}`);
           } else if (event.type === 'engine') {
             setStatus(event.data.msg || 'ENGINE_EVENT');
             addLog(event.data.msg || 'Engine event');
@@ -661,6 +664,7 @@
         }
         id('startBtn').textContent = 'RUNNING...';
         id('startBtn').disabled = true;
+        engineActive = true;
         setStatus('DRY_RUN_ACTIVE');
         addLog(`Engine started: ${symbol} in DRY_RUN`);
         initChart();
@@ -676,6 +680,7 @@
 
     async function stopEngine() {
       try { await fetch(`${API_BASE}/api/stop`, { method: 'POST', headers: authHeaders() }); } catch (e) { /* silent */ }
+      engineActive = false;
       disconnectSSE();
       stopTreasuryPoll();
       stopStaleTimer();
@@ -693,8 +698,52 @@
       addLog('Manual refresh');
     }
 
+    async function hydrateFromCurrentState() {
+      if (!apiToken) return;
+      try {
+        const res = await fetch(`${API_BASE}/api/state`, { headers: authHeaders() });
+        if (!res.ok) return;
+        const s = await res.json();
+        const symbols = Array.isArray(s.symbols) ? s.symbols : [];
+        if (symbols.length > 0 && id('dryRunSymbol')) {
+          id('dryRunSymbol').value = symbols[0];
+        }
+        if (s.running) {
+          const mode = String(s.mode || 'DRY_RUN').toUpperCase();
+          id('startBtn').textContent = 'RUNNING...';
+          id('startBtn').disabled = true;
+          engineActive = true;
+          setStatus(`${mode}_ACTIVE`);
+          addLog(`Attached to running engine: ${symbols.join(', ') || 'N/A'} (${mode})`);
+          connectSSE();
+          startTreasuryPoll();
+          startStaleTimer();
+          loadGoldenParams();
+          return;
+        }
+        engineActive = false;
+        setStatus('READY');
+      } catch (e) {
+        addLog('State hydrate failed', 'error');
+      }
+    }
+
+    function stopEngineOnWindowClose() {
+      if (!engineActive || !apiToken) return;
+      const stopUrl = `${API_BASE}/api/stop?token=${encodeURIComponent(apiToken)}`;
+      try {
+        if (navigator.sendBeacon) {
+          navigator.sendBeacon(stopUrl, '');
+          return;
+        }
+      } catch (e) { /* noop */ }
+      try {
+        fetch(stopUrl, { method: 'POST', keepalive: true });
+      } catch (e) { /* noop */ }
+    }
+
     // ── Init ──
-    (function init() {
+    (async function init() {
       if (apiToken) {
         setStatus('READY');
         addLog('Token auto-loaded from server.');
@@ -703,6 +752,9 @@
         addLog('No token — check MAMMON_API_TOKEN in .env', 'error');
       }
       initChart();
+      await hydrateFromCurrentState();
+      window.addEventListener('pagehide', stopEngineOnWindowClose);
+      window.addEventListener('beforeunload', stopEngineOnWindowClose);
     })();
   </script>
 </body>

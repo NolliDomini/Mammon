@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, Set
 import math
 from Cerebellum.Soul.brain_frame import BrainFrame
 from Hippocampus.Archivist.synapse_scribe import SynapseScribe
@@ -23,8 +23,17 @@ class Amygdala:
         )
         self.scribe = scribe or SynapseScribe(db_path=self._primary_db_path)
         self._scribes: Dict[str, SynapseScribe] = {"PRIMARY": self.scribe}
+        configured_pulses = self.config.get("synapse_persist_pulse_types", ["MINT"])
+        if isinstance(configured_pulses, str):
+            configured_pulses = [configured_pulses]
+        self.persist_pulse_types: Set[str] = {
+            str(p).strip().upper() for p in (configured_pulses or []) if str(p).strip()
+        }
+        if not self.persist_pulse_types:
+            self.persist_pulse_types = {"MINT"}
         self.last_mint_ts = None
         self.mint_count = 0
+        self.persist_count = 0
         self.last_machine_code = None
         self.last_target_db = str(self._primary_db_path)
         self.last_write_status = "IDLE"
@@ -58,7 +67,8 @@ class Amygdala:
                 return f"MISSING_KEY:{key}"
         if not str(ticket.get("symbol") or "").strip():
             return "INVALID_SYMBOL"
-        if str(ticket.get("pulse_type") or "").upper() != "MINT":
+        pulse = str(ticket.get("pulse_type") or "").upper()
+        if pulse not in self.persist_pulse_types:
             return "INVALID_PULSE_TYPE"
         return None
 
@@ -85,16 +95,17 @@ class Amygdala:
     def mint_synapse_ticket(self, pulse_type: str, frame: BrainFrame):
         """
         Mints the unified ticket by flattening the BrainFrame into the isolated silo.
-        V3.2 STRICT: Only MINT pulses are persisted. SEED/ACTION are ephemeral.
+        Default behavior is MINT-only; decision-quality mode can persist SEED/ACTION too.
         """
-        if str(pulse_type or "").upper() != "MINT":
+        pulse_type_u = str(pulse_type or "").upper()
+        if pulse_type_u not in self.persist_pulse_types:
             return
 
         try:
             raw_ticket = frame.to_synapse_dict()
             ticket = self._normalize_ticket(raw_ticket)
-            ticket["pulse_type"] = "MINT"
-            ticket["machine_code"] = self._compose_machine_code(ticket, pulse_type)
+            ticket["pulse_type"] = pulse_type_u
+            ticket["machine_code"] = self._compose_machine_code(ticket, pulse_type_u)
             mode = str(ticket.get("execution_mode") or "DRY_RUN").upper()
             err = self._validate_ticket(ticket)
             if err:
@@ -105,14 +116,16 @@ class Amygdala:
 
             target_scribe, target_db = self._get_scribe_for_mode(mode)
             target_scribe.mint(ticket)
-            self.last_mint_ts = ticket.get("ts")
+            if pulse_type_u == "MINT":
+                self.last_mint_ts = ticket.get("ts")
+                self.mint_count += 1
+            self.persist_count += 1
             self.last_machine_code = ticket.get("machine_code")
             self.last_target_db = str(target_db)
-            self.mint_count += 1
             self.last_write_status = "SUCCESS"
             self.last_error_code = None
             self.last_error_message = None
-            print(f"[AMYGDALA] MINT Synapse Isolated (Silo): {self.last_mint_ts}")
+            print(f"[AMYGDALA] {pulse_type_u} Synapse Isolated (Silo): {ticket.get('ts')}")
         except Exception as e:
             self.last_write_status = "ERROR"
             self.last_error_code = "WRITE_FAILURE"
@@ -122,9 +135,11 @@ class Amygdala:
     def get_state(self):
         return {
             "mint_count": self.mint_count,
+            "persist_count": self.persist_count,
             "last_ts": self.last_mint_ts,
             "last_machine_code": self.last_machine_code,
             "last_target_db": self.last_target_db,
+            "persist_pulse_types": sorted(self.persist_pulse_types),
             "last_write_status": self.last_write_status,
             "last_error_code": self.last_error_code,
             "last_error_message": self.last_error_message,

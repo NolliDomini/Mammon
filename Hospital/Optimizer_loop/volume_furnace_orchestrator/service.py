@@ -67,6 +67,39 @@ class VolumeFurnaceOrchestrator:
         if len(self.telemetry) > self.telemetry_limit:
             self.telemetry = self.telemetry[-self.telemetry_limit :]
 
+    def _coerce_context(
+        self,
+        *,
+        regime_id: str,
+        price: float,
+        atr: float,
+        stop_level: float,
+    ) -> tuple[str, float, float, float, list[str]]:
+        """
+        Normalize runtime context so warmup frames do not suppress cadence execution.
+        """
+        fallback_flags: list[str] = []
+
+        regime = str(regime_id or "").strip()
+        if regime.upper() in {"", "UNK", "UNKNOWN", "NONE"}:
+            regime = "GLOBAL"
+            fallback_flags.append("REGIME_FALLBACK")
+
+        p = float(price or 0.0)
+        a = float(atr or 0.0)
+        s = float(stop_level or 0.0)
+
+        if p > 0.0 and a <= 0.0:
+            # Use a conservative 0.10% ATR proxy until Council warmup completes.
+            a = max(p * 0.001, 1e-6)
+            fallback_flags.append("ATR_FALLBACK")
+        if p > 0.0 and s <= 0.0 and a > 0.0:
+            # Derive a synthetic stop floor from price and ATR proxy.
+            s = max(p - (1.5 * a), 1e-6)
+            fallback_flags.append("STOP_FALLBACK")
+
+        return regime, p, a, s, fallback_flags
+
     def _validate_context(
         self,
         *,
@@ -88,7 +121,7 @@ class VolumeFurnaceOrchestrator:
             return "SUPPORT_FLOOR"
         if not regime_id or str(regime_id).upper() in {"", "UNK", "UNKNOWN", "NONE"}:
             return "MISSING_CONTEXT"
-        if atr <= 0.0 or price <= 0.0 or stop_level <= 0.0:
+        if price <= 0.0:
             return "MISSING_CONTEXT"
         return None
 
@@ -120,22 +153,39 @@ class VolumeFurnaceOrchestrator:
         if pulse_type == "MINT":
             self.mint_count += 1
 
-        reason = self._validate_context(
-            pulse_type=pulse_type,
-            mode=mode,
+        regime_ctx, price_ctx, atr_ctx, stop_ctx, fallback_flags = self._coerce_context(
             regime_id=str(regime_id or ""),
             price=float(price),
             atr=float(atr),
             stop_level=float(stop_level),
+        )
+
+        reason = self._validate_context(
+            pulse_type=pulse_type,
+            mode=mode,
+            regime_id=regime_ctx,
+            price=price_ctx,
+            atr=atr_ctx,
+            stop_level=stop_ctx,
             support_floor_ok=True,
         )
         if reason:
-            self._record_decision(reason, pulse_type=pulse_type, regime_id=regime_id)
+            self._record_decision(
+                reason,
+                pulse_type=pulse_type,
+                regime_id=regime_ctx,
+                context_fallbacks=fallback_flags,
+            )
             return
 
         cadence_reason = self._cadence_gate()
         if cadence_reason:
-            self._record_decision(cadence_reason, pulse_type=pulse_type, regime_id=regime_id)
+            self._record_decision(
+                cadence_reason,
+                pulse_type=pulse_type,
+                regime_id=regime_ctx,
+                context_fallbacks=fallback_flags,
+            )
             return
 
         allow_bayesian = (self.activation_count % 4) == 0
@@ -143,10 +193,10 @@ class VolumeFurnaceOrchestrator:
 
         try:
             summary = self.engine.run_pipeline(
-                regime_id=regime_id,
-                price=float(price),
-                atr=float(atr),
-                stop_level=float(stop_level),
+                regime_id=regime_ctx,
+                price=price_ctx,
+                atr=atr_ctx,
+                stop_level=stop_ctx,
                 allow_bayesian=allow_bayesian,
                 mutations=mutations,
             )
@@ -155,24 +205,31 @@ class VolumeFurnaceOrchestrator:
             self._record_decision(
                 "EXECUTED",
                 pulse_type=pulse_type,
-                regime_id=regime_id,
+                regime_id=regime_ctx,
                 allow_bayesian=allow_bayesian,
+                context_fallbacks=fallback_flags,
                 promotion_decision=self.last_summary.get("promotion_decision")
                 or self.last_summary.get("reason"),
             )
             print(
                 f"[FURNACE_V2] event=pipeline_complete run_id={self.run_id} "
                 f"mint={self.mint_count} activation={self.activation_count} "
-                f"regime_id={regime_id} summary={summary}"
+                f"regime_id={regime_ctx} summary={summary}"
             )
         except Exception as exc:
             self.last_error = str(exc)
             self.last_summary = {}
-            self._record_decision("PIPELINE_ERROR", pulse_type=pulse_type, regime_id=regime_id, error=str(exc))
+            self._record_decision(
+                "PIPELINE_ERROR",
+                pulse_type=pulse_type,
+                regime_id=regime_ctx,
+                error=str(exc),
+                context_fallbacks=fallback_flags,
+            )
             print(
                 f"[FURNACE_V2] event=pipeline_error run_id={self.run_id} "
                 f"mint={self.mint_count} activation={self.activation_count} "
-                f"regime_id={regime_id} error={exc}"
+                f"regime_id={regime_ctx} error={exc}"
             )
 
     def handle_frame(self, *, pulse_type: str, frame: Any, walk_seed: Any = None):
@@ -199,31 +256,48 @@ class VolumeFurnaceOrchestrator:
         if pulse_type == "MINT":
             self.mint_count += 1
 
-        reason = self._validate_context(
-            pulse_type=pulse_type,
-            mode=mode,
+        regime_ctx, price_ctx, atr_ctx, stop_ctx, fallback_flags = self._coerce_context(
             regime_id=regime_id,
             price=float(getattr(frame.structure, "price", 0.0) or 0.0),
             atr=float(getattr(frame.environment, "atr", 0.0) or 0.0),
             stop_level=float(getattr(frame.structure, "active_lo", 0.0) or 0.0),
+        )
+
+        reason = self._validate_context(
+            pulse_type=pulse_type,
+            mode=mode,
+            regime_id=regime_ctx,
+            price=price_ctx,
+            atr=atr_ctx,
+            stop_level=stop_ctx,
             support_floor_ok=support_floor_ok,
         )
         if reason:
-            self._record_decision(reason, pulse_type=pulse_type, regime_id=regime_id)
+            self._record_decision(
+                reason,
+                pulse_type=pulse_type,
+                regime_id=regime_ctx,
+                context_fallbacks=fallback_flags,
+            )
             return
 
         cadence_reason = self._cadence_gate()
         if cadence_reason:
-            self._record_decision(cadence_reason, pulse_type=pulse_type, regime_id=regime_id)
+            self._record_decision(
+                cadence_reason,
+                pulse_type=pulse_type,
+                regime_id=regime_ctx,
+                context_fallbacks=fallback_flags,
+            )
             return
 
         allow_bayesian = (self.activation_count % 4) == 0
         try:
             summary = self.engine.run_pipeline(
-                regime_id=regime_id,
-                price=float(getattr(frame.structure, "price", 0.0) or 0.0),
-                atr=float(getattr(frame.environment, "atr", 0.0) or 0.0),
-                stop_level=float(getattr(frame.structure, "active_lo", 0.0) or 0.0),
+                regime_id=regime_ctx,
+                price=price_ctx,
+                atr=atr_ctx,
+                stop_level=stop_ctx,
                 allow_bayesian=allow_bayesian,
                 mutations=mutations,
             )
@@ -232,16 +306,23 @@ class VolumeFurnaceOrchestrator:
             self._record_decision(
                 "EXECUTED",
                 pulse_type=pulse_type,
-                regime_id=regime_id,
+                regime_id=regime_ctx,
                 allow_bayesian=allow_bayesian,
                 mode_context=mode,
+                context_fallbacks=fallback_flags,
                 promotion_decision=self.last_summary.get("promotion_decision")
                 or self.last_summary.get("reason"),
             )
         except Exception as exc:
             self.last_error = str(exc)
             self.last_summary = {}
-            self._record_decision("PIPELINE_ERROR", pulse_type=pulse_type, regime_id=regime_id, error=str(exc))
+            self._record_decision(
+                "PIPELINE_ERROR",
+                pulse_type=pulse_type,
+                regime_id=regime_ctx,
+                error=str(exc),
+                context_fallbacks=fallback_flags,
+            )
 
     def get_state(self) -> Dict[str, Any]:
         return {

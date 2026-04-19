@@ -13,21 +13,48 @@ class SynapseRefinery:
         self.db_path = synapse_db_path or Path(__file__).resolve().parents[2] / "Hippocampus" / "Archivist" / "Ecosystem_Synapse.db"
         self.librarian = Librarian(db_path=self.db_path)
 
+    def _resolve_time_filter(self) -> tuple[str, str]:
+        """
+        Determine which timestamp column exists and how to filter it.
+        """
+        try:
+            cols = self.librarian.read_only("PRAGMA table_info('synapse_mint')")
+            names = {str(c.get("name", "")).lower() for c in cols if isinstance(c, dict)}
+        except Exception:
+            names = set()
+
+        if "created_at" in names:
+            return "created_at", "datetime(created_at) >= datetime('now', ?)"
+        if "ts" in names:
+            # ts is typically ISO-8601 text in this silo (e.g., 2026-04-18T21:25:00+00:00).
+            return "ts", "datetime(replace(substr(ts, 1, 19), 'T', ' ')) >= datetime('now', ?)"
+        return "", ""
+
     def harvest_training_data(self, hours: int = 24) -> pd.DataFrame:
         """
         Extracts recent synapse tickets and calculates a 'Realized Fitness' score.
         """
         print(f"[REFINERY] Harvesting synapse tickets from last {hours}h...")
-        
-        query = f"""
-            SELECT * FROM synapse_mint 
-            WHERE created_at >= datetime('now', '-{hours} hours')
-            AND pulse_type = 'MINT'
-        """
+
+        time_col, time_predicate = self._resolve_time_filter()
+        lookback = f"-{int(hours)} hours"
+        if time_col:
+            query = f"""
+                SELECT * FROM synapse_mint
+                WHERE {time_predicate}
+                AND pulse_type = 'MINT'
+            """
+            params = (lookback,)
+        else:
+            query = """
+                SELECT * FROM synapse_mint
+                WHERE pulse_type = 'MINT'
+            """
+            params = ()
         
         try:
             # V3.1: Use Librarian for unified access
-            rows = self.librarian.read_only(query)
+            rows = self.librarian.read_only(query, params)
             df = pd.DataFrame(rows)
             
             if df.empty:
