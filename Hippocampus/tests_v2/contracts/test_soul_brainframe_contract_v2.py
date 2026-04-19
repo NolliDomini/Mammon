@@ -283,10 +283,14 @@ def test_action_to_mint_30s_timing_guard_deterministic(monkeypatch):
         "Gatekeeper": Gate(),
         "Brain_Stem": Brain(),
     }
-    seq = iter([1000.0, 1031.0])
+    # With pulse timestamp authority, a 2-minute action->mint gap is stale.
+    seq = iter([1000.0, 1060.0])
     monkeypatch.setattr("Cerebellum.Soul.orchestrator.time.time", lambda: next(seq))
-    o._process_frame(_df("ACTION"))
-    o._process_frame(_df("MINT"))
+    action_df = _df("ACTION")
+    mint_df = _df("MINT")
+    mint_df.index = pd.to_datetime(["2026-01-01 12:02:00"])
+    o._process_frame(action_df)
+    o._process_frame(mint_df)
     assert any(e[0] == "MINT" and "TIMING_CANCEL" in e[1] and e[2] is False for e in events)
 
 

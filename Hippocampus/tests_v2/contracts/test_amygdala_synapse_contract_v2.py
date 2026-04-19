@@ -60,6 +60,26 @@ def test_non_mint_pulses_do_not_persist_synapse_ticket():
     assert int(rows[0]["c"]) == 0
 
 
+def test_decision_quality_mode_persists_seed_action_and_mint():
+    dbp = temp_db_path("v2_amygdala_decision_quality")
+    a = Amygdala(
+        config={
+            "synapse_db_path_primary": str(dbp),
+            "synapse_persist_pulse_types": ["SEED", "ACTION", "MINT"],
+        }
+    )
+    f = _frame()
+    a.mint_synapse_ticket("SEED", f)
+    a.mint_synapse_ticket("ACTION", f)
+    f.market.ts = f.market.ts + (f.market.ohlcv.index[1] - f.market.ohlcv.index[0])
+    a.mint_synapse_ticket("MINT", f)
+    rows = _rows(dbp, "SELECT pulse_type, COUNT(*) AS c FROM synapse_mint GROUP BY pulse_type")
+    counts = {str(r["pulse_type"]).upper(): int(r["c"]) for r in rows}
+    assert counts.get("SEED", 0) == 1
+    assert counts.get("ACTION", 0) == 1
+    assert counts.get("MINT", 0) == 1
+
+
 def test_mint_writes_required_snapshot_schema_fields():
     dbp = temp_db_path("v2_amygdala_required_schema")
     a = _mk_amygdala(dbp)

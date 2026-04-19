@@ -99,9 +99,11 @@ def test_optimizer_skip_reasons_and_error_isolation_are_explicit():
     assert len(calls) == 0
 
     f.shutdown_requested = False
-    fr_missing = _frame(mode="DRY_RUN", atr=0.0)
+    fr_missing = _frame(mode="DRY_RUN", atr=0.0, stop=0.0)
     f.handle_frame(pulse_type="MINT", frame=fr_missing, walk_seed=SimpleNamespace(regime_id="R1", mutations=[0.1], support_floor_ok=True))
-    assert f.last_decision == "MISSING_CONTEXT"
+    assert f.last_decision == "EXECUTED"
+    assert calls[-1]["atr"] > 0.0
+    assert calls[-1]["stop_level"] > 0.0
 
     fr_support = _frame(mode="DRY_RUN")
     f.handle_frame(pulse_type="MINT", frame=fr_support, walk_seed=SimpleNamespace(regime_id="R1", mutations=[0.1], support_floor_ok=False))
