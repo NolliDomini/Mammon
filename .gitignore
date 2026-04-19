@@ -12,6 +12,8 @@ runtime/
 logs/
 Archive/
 ui_work/
+Hippocampus/Archivist/snapshots/
+*.duckdb.wal
 
 # Python Environment
 venv/
