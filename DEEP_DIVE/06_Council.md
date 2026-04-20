@@ -129,3 +129,32 @@ Spread runs on SEED and ACTION only — skipped at MINT.
 - **ADX dominates at 52%+**: if ADX fires high on a choppy bar, Council will approve despite poor volume/spread conditions.
 - **Regime override prefix matching is ordered by dict iteration** — Python dicts are insertion-ordered but the vault JSON load order may not be predictable if multiple prefixes could match.
 - **Minimum history for ATR requires 50 bars** (`atr_avg_window=50`) — early in a session or after restart, ATR score returns 0.0, dragging confidence down even in healthy markets.
+
+---
+
+## 11. Deep Investigation Findings
+
+### Finding 1: SpreadEngine ATR Circular Dependency
+
+SpreadEngine runs **before** ATR is computed in the Council cycle. Its ATR fallback path reads:
+```python
+spread_bps = frame.environment.atr * spread_atr_ratio
+```
+
+`frame.environment.atr` is written by Council's own ATR kernel — which hasn't run yet at the moment SpreadEngine needs it. SpreadEngine reads the **previous pulse's** `atr` value stored on the frame (structure/environment slots are preserved across `reset_pulse()`).
+
+At steady state this is benign — ATR changes slowly. On the **first pulse** after startup, `frame.environment.atr = 0.0` (BrainFrame default), so SpreadEngine's ATR fallback produces `spread_bps = 0.0` and `spread_score = 1.0` (maximum) regardless of actual market conditions. The first pulse's confidence is overstated.
+
+---
+
+### Finding 2: Council Writes `frame.risk.regime_id` — TurtleWalk Overwrites It
+
+Council writes `frame.risk.regime_id` from its D_A_V_T computation. `QuantizedGeometricWalk.build_seed()` runs next in the Soul sequence and writes its own `regime_id` to the same field with different bin thresholds. TurtleWalk's value is always the final one on `frame.risk.regime_id`.
+
+The practical impact is that Council's `regime_weight_table` lookup (which uses Council's binning) and TurtleWalk's Walk Silo discharge (which keys on `frame.risk.regime_id` — TurtleWalk's binning) may reference different regime strings for the same market state. See `07_Left_Hemisphere.md` Section 11 for the full overwrite sequence.
+
+---
+
+### Finding 3: Production Lobes Use `Librarian` Test Shim
+
+Council instantiates `Librarian()` (the SQLite test shim) directly for its DB writes, not `MultiTransportLibrarian`. This means Council's `callosum_mint`, `cortex_precalc`, and related writes go to a per-instance SQLite connection, not the shared DuckDB analytical store. The same pattern applies to TurtleMonte, Callosum, and Gatekeeper. The `09_Hippocampus.md` documents this at the infrastructure level — the consequence for each lobe is that its analytical writes land in a test SQLite file rather than the production DuckDB schema.

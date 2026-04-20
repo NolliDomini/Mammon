@@ -98,3 +98,58 @@ The system has **dual independent gating** — Gatekeeper approves on threshold,
 - **Flat sizing** means position size never scales with conviction — a 0.31 tier_score and a 0.99 tier_score produce the same order size.
 - **Gatekeeper thresholds are duplicated in Brain Stem config** (`gatekeeper_min_monte`, `gatekeeper_min_council`) — both lobes read the same Gold param keys. If they diverge, the system can approve at Gatekeeper and reject at Brain Stem (or vice versa).
 - **`evaluate()` legacy API** remains on Gatekeeper — different threshold logic from `decide()`. If anything still calls `evaluate()`, it uses a different approval path with potentially different outcomes.
+
+---
+
+## Deep Investigation Findings
+
+### Finding 1: Callosum Dead Weights — Two of Four Optimization Dimensions Are Inert
+
+`Corpus/callosum/service.py` — `_read_weights()` returns only two values:
+```python
+w_monte = config.get("callosum_w_monte", 1.0)
+w_right = config.get("callosum_w_right", 0.0)
+return w_monte, w_right
+```
+
+The blend formula uses only these two:
+```python
+raw_score = (monte_score * w_monte) + (signal_strength * w_right)
+```
+
+`callosum_w_adx` and `callosum_w_weak` appear **only** in `_log_score()`, the DB audit insert:
+```python
+self.librarian.write("callosum_mint", {
+    ...
+    "adx_val":     0.5,   # hardcoded — not from frame
+    "weakness_val": 0.5,  # hardcoded — not from frame
+    "w_adx":       config.get("callosum_w_adx", 0.0),
+    "w_weak":      config.get("callosum_w_weak", 0.0),
+})
+```
+
+The Gold params include `callosum_w_adx` and `callosum_w_weak`. Pituitary's GP optimizer spends two PARAM_KEYS dimensions evolving these weights. They are logged to the DB with hardcoded `0.5` input values and have zero effect on the blend. The optimizer is tuning parameters that do nothing.
+
+---
+
+### Finding 2: `confidence_score` Ghost Attribute on `CommandSlot`
+
+`Medulla/gatekeeper/service.py` line 111 sets:
+```python
+frame.command.confidence_score = final_conf
+```
+
+`CommandSlot` (the BrainFrame command dataclass) has no `confidence_score` field. Python adds this as a dynamic instance attribute — no error is raised. Nothing downstream reads `frame.command.confidence_score`. The value is a duplicate of `final_confidence` (which IS a CommandSlot field and IS read by some paths). The ghost attribute is written every ACTION pulse and immediately orphaned.
+
+---
+
+### Finding 3: `gatekeeper_min_monte` Is Checked Twice Against Different Simulations
+
+The threshold `gatekeeper_min_monte` (default `0.30`) is applied independently at two gates:
+
+| Gate | Where | Simulation | Input |
+|---|---|---|---|
+| Gatekeeper `decide()` | `Medulla/gatekeeper/service.py` | TurtleMonte 30k-path output (`frame.risk.tier_score`) | `tier_score > gatekeeper_min_monte` |
+| Brain Stem `_run_risk_gate()` | `Brain_Stem/trigger/service.py` | Own 1k-path mini Monte (prior-biased) | `risk_score >= gatekeeper_min_monte` |
+
+Same param key, different Monte Carlo simulations. Brain Stem's Risk Gate biases the noise distribution using prior conviction (`brain_stem_bias`), producing a directionally tilted score. A candidate can pass Gatekeeper's unbiased check and fail Brain Stem's conviction-adjusted check, or vice versa. The dual-gate design is intentional (second opinion) but the threshold conflation creates an implicit dependency between two independent simulations.

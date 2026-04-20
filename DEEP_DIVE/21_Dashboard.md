@@ -196,7 +196,7 @@ return jsonify({
 | Z-Dist | `val_z_distance` | `frame.valuation.z_distance` |
 | Spread | `spread_score` | `frame.environment.spread_score` |
 
-**Status: Valuation section may show zeros.** `frame.valuation` is a BrainFrame slot. Whether it is populated depends on whether a Valuation lobe is registered. In the current `_engine_loop`, no Valuation lobe is registered — `Right_Hemisphere`, `Council`, `Left_Hemisphere`, `Corpus`, `Gatekeeper`, `Brain_Stem`, `Thalamus` are registered. No explicit Valuation lobe. `val_mean`, `val_std_dev`, `val_z_distance` will be 0 unless Brain Stem or another lobe writes to `frame.valuation`.
+**Status: Valuation section always zeros.** Brain Stem's `_run_valuation_gate()` computes mean/sigma/bands internally (10k-path Monte) but stores results in `pending_entry` only — it does NOT write back to `frame.valuation`. `ValuationSlot` is reset to zero on every `reset_pulse()` and nothing writes to it. `val_mean` and `val_z_distance` are permanently 0.
 
 **Execution section:**
 | UI | Event field | Source |
@@ -229,7 +229,7 @@ return jsonify({
 | Risk% | `risk_used` | `frame.command.risk_used` |
 | Size Reason | `size_reason` | `frame.command.size_reason` |
 
-**Status: Qty/Notional/Conviction/Risk% likely zeros.** These fields require the full Brain Stem sizing model (`risk_per_trade_pct`, `equity` params, cost penalty) to be wired. In DRY_RUN they may be computed but not persisted to BrainFrame command slot correctly if Brain Stem skips sizing in dry run.
+**Status: Qty/Notional/Conviction/Risk% always zeros; Apprv/Ready work.** Gatekeeper writes `sizing_mult` (flat `0.01` from vault). Brain Stem reads `sizing_mult` as its qty. But `frame.command.qty`, `frame.command.notional`, `frame.command.cost_adjusted_conviction`, and `frame.command.risk_used` are written by AllocationGland, which is never called. Dashboard reads `qty`/`notional`/`cost_adjusted_conviction`/`risk_used` — all show `0`. The actual trade quantity (0.01 units) is only visible in `sizing_mult`, which the dashboard reads as `bfConviction`. `bfSizingReason` shows `"NONE"` (AllocationGland never sets it).
 
 ---
 
@@ -332,6 +332,7 @@ GET `/api/engine/lifecycle?limit=100` returns the tail of this file as JSON.
 - **SSE stream never closes.** The `generate()` function is an infinite loop with a 30-second timeout for keepalive. The connection stays open until the browser closes it or the server dies. There is no per-client timeout.
 - **Chart not hydrated on reconnect.** `hydrateFromCurrentState()` attaches SSE if engine is running but does not call `/api/frame/latest` to pre-populate the chart. First candle appears only on the next pulse.
 - **`api_frame_latest` exists but is never used by the UI.** The poll fallback endpoint at `/api/frame/latest` is defined but `hydrateFromCurrentState()` doesn't call it — the chart hydration gap on reconnect is a known unfinished path.
+- **SSE queue is shared across all clients — multiple tabs starve each other.** `state.sse_queue` is a single `Queue(maxsize=500)` instance. The `generate()` SSE generator function runs per-connection but every connection reads from the same queue with `get(timeout=30)`. A pulse event placed on the queue is consumed by whichever connection dequeues it first — it is not broadcast. With two browser tabs open, events are split between tabs and each tab receives roughly half of all pulses. With three tabs, each gets approximately one-third. The second and third tabs will show the pulse dot firing inconsistently and the Brain Frame panels will update at reduced frequency. This is not a bug in the SSE protocol — it is the design using a shared queue rather than per-client queues or a pub/sub fan-out.
 
 ---
 
@@ -452,8 +453,8 @@ BrainFrame is always initialized (`BrainFrame.__init__()` sets all slots to zero
 
 | DOM id | JS reads | Event key | Backend expression | Status |
 |---|---|---|---|---|
-| `bfMean` | `d.val_mean` | `val_mean` | `frame.valuation.mean` | ➖ always 0.00 |
-| `bfZDist` | `d.val_z_distance` | `val_z_distance` | `frame.valuation.z_distance` | ➖ always 0.0000 |
+| `bfMean` | `d.val_mean` | `val_mean` | `frame.valuation.mean` | ➖ always 0.00 — Brain Stem computes mean internally but does not write to `frame.valuation` |
+| `bfZDist` | `d.val_z_distance` | `val_z_distance` | `frame.valuation.z_distance` | ➖ always 0.0000 — same reason |
 | `bfSpreadScore` (labeled "Spread") | `d.spread_score` | `spread_score` | `frame.environment.spread_score` | ✅ — reads from environment, not valuation; confusingly labeled but gets data |
 
 Note: There are **two cells labeled "Spread"** in different sections — one in Environment (`bid_ask_bps`) and one in Valuation (`spread_score` from environment). Different metrics, same label.
@@ -486,11 +487,11 @@ Note: There are **two cells labeled "Spread"** in different sections — one in 
 |---|---|---|---|---|
 | `bfApproved` | `d.approved` | `approved` | `frame.command.approved` → Gatekeeper | ✅ |
 | `bfReady` | `d.ready_to_fire` | `ready_to_fire` | `frame.command.ready_to_fire` → BrainStem ARM | ✅ |
-| `bfQty` | `d.qty` | `qty` | `frame.command.qty` → AllocationGland | ⚠️ 0 if AllocationGland not called |
-| `bfNotional` | `d.notional` | `notional` | `frame.command.notional` → AllocationGland | ⚠️ 0 if AllocationGland not called |
-| `bfConviction` | `d.cost_adjusted_conviction` | `cost_adjusted_conviction` | `frame.command.cost_adjusted_conviction` → AllocationGland | ⚠️ 0 if AllocationGland not called |
-| `bfRiskUsed` | `d.risk_used` | `risk_used` | `frame.command.risk_used` → AllocationGland | ⚠️ 0 if AllocationGland not called |
-| `bfSizingReason` | `d.size_reason` | `size_reason` | `frame.command.size_reason` → AllocationGland | ⚠️ `"NONE"` if AllocationGland not called |
+| `bfQty` | `d.qty` | `qty` | `frame.command.qty` → AllocationGland (never called) | ➖ always 0 |
+| `bfNotional` | `d.notional` | `notional` | `frame.command.notional` → AllocationGland (never called) | ➖ always 0 |
+| `bfConviction` | `d.cost_adjusted_conviction` | `cost_adjusted_conviction` | `frame.command.cost_adjusted_conviction` → AllocationGland (never called) | ➖ always 0 — NOTE: actual trade qty is in `sizing_mult` (0.01), not here |
+| `bfRiskUsed` | `d.risk_used` | `risk_used` | `frame.command.risk_used` → AllocationGland (never called) | ➖ always 0 |
+| `bfSizingReason` | `d.size_reason` | `size_reason` | `frame.command.size_reason` → AllocationGland (never called) | ➖ always `"NONE"` |
 
 ---
 

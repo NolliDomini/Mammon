@@ -39,6 +39,23 @@ services:
       - .:/mammon
     restart: unless-stopped
 
+  mcp:
+    build: ./mcp_server
+    container_name: mammon-mcp
+    ports:
+      - "5001:5001"
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - MAMMON_BASE=/mammon
+      - MCP_PORT=5001
+    depends_on:
+      - redis
+    volumes:
+      # Same mount as dashboard — reads all SQLite/DuckDB files directly
+      - .:/mammon
+    restart: unless-stopped
+
 volumes:
   mammon-redis-data:
   mammon-timescale-data:

@@ -210,6 +210,35 @@ Three compounding failures: (a) `TurtleWalk._mint_seed()` calls `self.librarian.
 **8. Telepathy is bypassed for all DuckDB/TimescaleDB writes.**
 `MultiTransportLibrarian.write()` calls `Telepathy().transmit(sql, params, transport=transport)` but `transmit()` accepts only 2 args — the extra `transport` keyword raises `TypeError`, caught silently, falls to `write_direct()`. All analytical writes are synchronous. The async queue is operationally dead for the main data path.
 
+**9. Trade sizing is flat, not risk-based.**
+`frame.command.sizing_mult` is set by Gatekeeper to `gatekeeper_sizing_mult` (vault value: `0.01`). Brain Stem fires every trade at exactly 0.01 units regardless of equity, conviction, volatility, or account size. AllocationGland (the risk-based sizer using `equity × risk_pct × conviction / stop_distance`) is implemented but never called in the Soul cycle. Position sizing has no relationship to account risk.
+
+**10. Brain Stem's key behavior params are outside the optimizer's reach.**
+Pituitary's 23-param PARAM_KEYS includes `brain_stem_survival` and `brain_stem_noise` — both are dead in `trigger/service.py` (never read). The params that actually control Brain Stem's entry/exit behavior (`brain_stem_entry_max_z`, `brain_stem_mean_dev_cancel_sigma`, `brain_stem_stale_price_cancel_bps`, `brain_stem_mean_rev_target_sigma`) are not in PARAM_KEYS and therefore never optimized. The GP mutation is spending two dimensions on dead parameters while the real behavioral controls are fixed at code defaults (all `0.0`).
+
+**11. The optimizer fitness loop is structurally circular.**
+`realized_fitness = (close - active_lo) / (active_hi - active_lo)` is high precisely when `close > active_hi` — which is also when `tier1_signal = 1` (the breakout trigger). DiamondGland's safe island (fitness > 0.75) constrains Pituitary toward parameters that generate breakout signals more frequently. The optimizer steers toward higher signal rate, not higher trade profitability. A parameter set that fires constantly into breakouts, losing money on every trade, would score well in the optimizer.
+
+**12. There is no P&L feedback at any level of the optimization loop.**
+Every signal the optimizer trains on is a proxy metric — actual trade P&L is never read:
+- `SynapseRefinery.realized_fitness` = `(close - active_lo) / (active_hi - active_lo)` — channel position proxy (code comment: *"This is a placeholder; real fitness will correlate to P/L of the trade if approved."*)
+- Hospital Stage E expectancy = Monte Carlo survival rate, slippage = `brain_stem_noise × 0.4` (dead param, see Risk 10)
+- ParamCrawler MINE fitness = mean re-synthesized tier score; `realized_pnl` field defaults to `ones` because it is absent from synapse tickets
+- Pituitary GP trains on `fitness_snapshot` (Gold) and `fitness_estimate` (Platinum/Silver) — both derived from the above proxies
+TreasuryGland has real fill P&L (`money_fills`, `money_positions`). Nothing reads it to feed the optimizer. The optimization loop is sealed from trading outcomes.
+
+**13. Two code paths called "Hospital" — only one writes to the vault.**
+There are two separate optimizer instances sharing the Stage A-H names:
+- **Batch Hospital** (`Hospital/Optimizer_loop/service.py`) — run manually/overnight. Stage H calls `Pituitary.secrete_platinum()` → writes `platinum_params.json` → influences next Pituitary GP run. This path works.
+- **Inline VolumeFurnace** (`Hospital/Optimizer_loop/volume_furnace_orchestrator/service.py`) — runs on the live thread every 3rd MINT. Stage H returns a promotion decision but `VolumeFurnaceOrchestrator` has no `PituitaryGland` reference and calls no vault-write method. Winners are logged to audit tables only.
+A promoted winner from the live optimizer never reaches Gold or Platinum. Only the overnight batch run produces vault-effective results.
+
+**14. WardManager's boot sweep is a multi-instance footgun.**
+`WardManager.janitor_sweep()` calls `redis.keys("mammon:brain_frame:*")` and deletes every matching key. It has no per-instance or per-mode scoping. If a live Soul instance and a paper-trading Soul instance share the same Redis namespace, one instance's boot wipes the other's active BrainFrame state mid-session. Also: `redis.keys()` is O(N) on all Redis keys — on a shared Redis instance this is a blocking scan at startup.
+
+**15. Tiers 2–4 of Right Hemisphere are empty stubs.**
+`MomentumEngine` (Tier 2 — MACD reversals), `VelocityEngine` (Tier 3 — Bollinger speed), and `LevelsEngine` (Tier 4 — pivot scanner) exist as stub classes. The system runs exclusively on Tier 1 (SnappingTurtle Donchian breakout). There is no momentum confirmation, no velocity filter, and no support/resistance context. `tier1_signal` is the only structural signal in the system.
+
 ---
 
 ## The Migration (service.py → service-TheBrain.py)

@@ -138,3 +138,42 @@ The two cadences are independent — Hospital fires every 3rd MINT, Pituitary GP
 - **500-candidate GP prediction is fast but shallow.** Matern GP fit on 2–3 points with 500 random candidates is a low-data surrogate — the surface is highly uncertain.
 - **Hospital cadence vs Pituitary cadence are unsynchronized.** Hospital might produce a new Platinum at MINT 3, but Pituitary won't run GP until MINT 4. If both fire in the same cycle, Platinum written at MINT 3 is immediately available — otherwise it waits a full GP cycle.
 - **Bronze history caps at 10 in vault, 100 in file** — minimal genealogy for debugging parameter drift.
+
+---
+
+## Deep Investigation Findings
+
+### Finding 1: Pituitary GP Data Starvation — Single-Point Training Is Frequent
+
+Silver is the secondary GP training tier. After every GP coronation:
+```python
+vault["silver"] = None   # consumed
+```
+
+Silver is replenished by **ParamCrawler MINE**, which runs every `crawler_mine_interval × 300s` (default `12 × 300 = 3600s ≈ 60 minutes`).
+
+Pituitary GP runs every **4th MINT ≈ 20 minutes** in live operation.
+
+**The cadence mismatch:** GP fires 3× per MINE cycle:
+- MINT 4: GP consumes Silver → Silver = None
+- MINT 8: GP runs with only Gold (+ Platinum if present)
+- MINT 12: MINE may have refilled Silver
+
+In the worst case (no Platinum, Silver consumed): Matern GP trains on **one data point**. A 1-point GP in 23-D space is governed entirely by the kernel prior — the posterior is near-flat. The argmax over 500 random candidates on a near-flat surface is effectively random selection. The coronation proceeds, installs a near-random mutant as Gold, and triggers a full lobe reload.
+
+This is not an edge case. In normal live operation it happens every 2nd and 3rd GP run.
+
+---
+
+### Finding 2: Inline VolumeFurnace vs Batch Hospital — Two Code Paths, One Broken
+
+Two separate optimizer instances share the Stage A-H names but have different vault wiring:
+
+| | **Batch Hospital** | **Inline VolumeFurnace** |
+|---|---|---|
+| File | `Hospital/Optimizer_loop/service.py` | `volume_furnace_orchestrator/service.py` |
+| Runs | Manually / overnight | Every 3rd MINT, live thread |
+| Stage H result | `Pituitary.secrete_platinum()` called | Audit table write only |
+| Vault effect | Platinum updated → feeds GP | None |
+
+The "Full Optimization Flow" diagram above (`Hospital → secrete_platinum()`) describes the **batch Hospital only**. The inline VolumeFurnace — the one that runs continuously — never calls `secrete_platinum()`. The only optimizer that contributes to parameter evolution is the one that is not running during live trading.

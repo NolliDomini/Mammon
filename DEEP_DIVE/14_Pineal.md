@@ -99,3 +99,26 @@ This prevents data loss when Diamond fails to reach 50-ticket threshold for a sm
 - **Archive-then-wipe race.** If `finalize_fornix_staging()` is called while `secrete_melatonin()` is mid-purge on `synapse_db`, both hold SQLite write locks — potential contention or deadlock on high-activity runs.
 - **90-day window is a magic number.** It's not derived from any regime analysis — it's a hard-coded constant. If market regimes shift faster, 90 days of stale signal degrades DiamondGland quality.
 - **No metrics on what was purged.** Pineal deletes silently. There's no log of row counts removed, making it impossible to detect runaway growth or accidental over-purge.
+
+---
+
+## 10. Deep Investigation: Silent Data Loss Path in `finalize_fornix_staging()`
+
+The archive-then-wipe sequence in `finalize_fornix_staging()`:
+
+```python
+# Step 1: archive
+INSERT INTO synapse_mint SELECT * FROM history_synapse
+
+# Step 2: wipe
+DELETE FROM history_synapse
+```
+
+These two statements are **not wrapped in a transaction**. If the INSERT in Step 1 fails partway through (disk full, SQLite lock, OOM), the failure is caught and logged — but execution continues and **Step 2 runs regardless**. `history_synapse` is deleted even though the archive is incomplete or absent.
+
+The tickets in `history_synapse` represent the entire output of the last Fornix replay run. A partial archive failure means:
+- Some tickets land in permanent `synapse_mint`, some do not
+- All tickets are then deleted from staging
+- There is no recovery path — the next Fornix run starts fresh
+
+The fix is wrapping both statements in a single SQLite transaction (`BEGIN ... COMMIT`) with rollback on failure before the DELETE executes.

@@ -129,3 +129,58 @@ Soul._process_frame():
 - **Best-lane dominance**: 50% weight on the best-case lane means the system can be optimistic in volatile regimes — monte_score can stay high even when worst-lane survival collapses.
 - **Walk Silo freshness**: `WalkScribe.discharge()` pulls up to 35,000 mutations — if the silo is stale or empty, the deterministic fallback produces identical noise every pulse for a given regime, eliminating path diversity.
 - **n_steps = gear = 3**: extremely short forward window. 3 steps of noise from `active_lo` is a very tight test — small ATR moves dominate.
+
+---
+
+## 10. Deep Investigation: WalkSeed Mutation Self-Reinforcement
+
+### The Fallback Chain (confirmed from `Left_Hemisphere/Monte_Carlo/walk/service.py`)
+
+`QuantizedGeometricWalk.build_seed()` selects mutations via priority:
+
+```
+1. BACKTEST with frame.risk.shocks      → frame_shocks
+2. WalkScribe.discharge(regime_id)      → silo
+3. frame.risk.shocks (live fallback)    → frame_live
+4. deterministic RNG (hash of regime_id|mode|pulse_type) → deterministic_fallback
+```
+
+### What Actually Happens
+
+**Step 2 is permanently dead.** `WalkScribe.discharge()` reads from DuckDB `walk_mint` — a table that has no write path in production (`TurtleWalk._mint_seed()` calls `self.librarian.dispatch()` which does not exist on `Librarian`, raising a silent `AttributeError`). Discharge always returns `[]`. (See `17_WalkScribe.md` for full failure chain.)
+
+**First pulse:** `frame.risk.shocks` is empty at boot. Falls through to step 4 — deterministic fallback. `2048` normally-distributed values seeded by `hash(regime_id | mode | pulse_type)`. Reproducible, but has no relationship to actual market volatility for that regime.
+
+**Every subsequent pulse:** `frame.risk.shocks` carries the mutations from the previous pulse (the `frame_live` path). The Walk Engine wrote mutations from the last `build_seed()` call into `frame.risk.shocks`. The next pulse reads them back as its shock inputs.
+
+### The Consequence
+
+After pulse 1, the Monte Carlo is scoring survival against noise derived from its own previous output — a closed feedback loop. The system cannot incorporate real historical regime volatility (silo is dead). It cannot be seeded from backtest shocks in live mode. Each pulse's Monte simulation is calibrated against the drift of the previous pulse's simulation.
+
+If the previous pulse's shocks were optimistic (low variance, high survival), the next pulse's Monte will also be optimistic. The system can drift toward a self-reinforcing bullish bias in the noise distribution with no market anchor to correct it.
+
+**`shock_source = "silo_discharge"` is never reached in live operation.** The Monte Carlo always runs on deterministic fallback (first pulse) or previous-pulse recycled mutations (every subsequent pulse).
+
+---
+
+## 11. Deep Investigation: `regime_id` Overwrite Sequence
+
+Two components both write `frame.risk.regime_id` within the same `_process_frame()` call:
+
+**Step 1 — Council writes it:**
+`Council.consult()` computes D_A_V_T using its own bin thresholds and sets:
+```python
+frame.risk.regime_id = "D2_A1_V3_T2"   # Council's binning
+```
+
+**Step 2 — TurtleWalk overwrites it:**
+`walk_engine.build_seed()` runs after Council. `QuantizedGeometricWalk` computes its own D_A_V_T using **different bin thresholds** and writes:
+```python
+frame.risk.regime_id = "D1_A2_V2_T3"   # TurtleWalk's binning (may differ)
+```
+
+The `frame.risk.regime_id` that reaches `_frame_to_event()` and the dashboard is **TurtleWalk's version**, not Council's. The two can produce different strings for the same market state because they use different boundary values for each dimension.
+
+`07_Left_Hemisphere.md` Section 8 documents that divergence is possible. The addition here: **TurtleWalk always wins** — it is called second, its write is final.
+
+Practical consequence: the `regime_id` used to key the Walk Silo discharge (`WalkScribe.discharge(regime_id)`) and the `regime_id` used by Council's `regime_weight_table` override are derived from different binning functions. A parameter set that Council identifies as matching regime `D2_A1_V3_T2` may be keyed differently in Walk Silo history under TurtleWalk's binning. The two systems effectively speak different dialects of the same regime language.

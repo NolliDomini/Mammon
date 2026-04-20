@@ -170,3 +170,45 @@ Key params propagated to all lobes at `register_lobe()` and on hot-reload:
 - **`pulse_log` is unbounded in memory** — long-running sessions will grow this list indefinitely.
 - **`BrainFrame` is shared mutable state with no locking** — if any async or threading were introduced, race conditions would be immediate.
 - **timing inhibit monkeypatch**: the stale-MINT path directly sets `frame.command.ready_to_fire = False` mid-cycle — described in a comment as "a trick." It works, but it's fragile if the command slot is read before Brain Stem.
+
+---
+
+## 14. Deep Investigation Findings
+
+### Finding 1: `pulse_log` Memory Leak — Quantified
+
+`_log_pulse()` appends one dict to `self.pulse_log` every pulse:
+```python
+def _log_pulse(self, pulse_type, ...):
+    self.pulse_log.append({...})
+```
+
+There is no max-size cap, no pruning, no rotation. In live/DRY_RUN operation:
+
+- 3 pulses per 5-minute bar (SEED + ACTION + MINT) × 12 bars/hour × 24 hours = **864 entries/day**
+- Each entry is a dict with ~10 fields
+- At 30 days: ~25,000 entries growing in a single Python list in the orchestrator process
+
+The list is never read by any API endpoint or lobe. It exists as telemetry that feeds nothing. In long-running sessions (days/weeks) this is a slow memory leak that will eventually be noticeable. Fix: cap at e.g. 1000 entries with `deque(maxlen=1000)`.
+
+---
+
+### Finding 2: Conditional Lobe Execution Creates Stale Dashboard Values Between Breakouts
+
+In `_process_frame()`, TurtleMonte simulate, Callosum, Gatekeeper, and Brain Stem ARM are all gated behind `if tier1_signal == 1`:
+
+```python
+if self.frame.structure.tier1_signal == 1:
+    if pulse_type == "ACTION":
+        Left_Hemisphere.simulate()    # writes frame.risk scores
+        Corpus.score_tier()           # writes frame.risk.tier_score
+        Gatekeeper.decide()           # writes frame.command
+        if ready_to_fire:
+            Brain_Stem.load_and_hunt()
+```
+
+`frame.reset_pulse()` clears only ephemeral slots (`command`, `valuation`, `execution`). It does **not** clear `frame.risk` (monte_score, tier_score, lane_survivals, regime_id). These are preserved across pulses.
+
+**Consequence:** When `tier1_signal = 0` (no Donchian breakout), no new Monte Carlo runs and no new Gatekeeper decision fires. The Risk section on the dashboard (`monte_score`, `tier_score`, `worst/neutral/best_survival`, `regime_id`) shows values from the **last breakout event** — which could be 5 minutes ago or several hours ago. The dashboard has no indicator that these are stale values from a prior breakout window.
+
+A low-volatility session with infrequent breakouts produces a Risk panel that is perpetually out-of-date. The user sees positive-looking monte_score and tier_score from the last breakout while the current market state has not been re-evaluated.

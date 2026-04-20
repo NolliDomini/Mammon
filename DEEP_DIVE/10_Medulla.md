@@ -117,6 +117,7 @@ Two thin wrappers over Alpaca `client.submit_order()`:
 ## 8. Open Questions / Risks
 
 - **AllocationGland is dead code in the live path** — the sophisticated cost-adjusted sizing is implemented but not wired into Soul. Brain Stem fires based on Gatekeeper's flat `sizing_mult`.
+- **`gatekeeper_sizing_mult = 0.01`** is the live sizing parameter (from `hormonal_vault.json`). Every approved trade fires at exactly 0.01 units regardless of equity, conviction, or volatility. For BTC at $65,000 this is a $650 notional. Not risk-pct based — flat fractional unit.
 - **SQLite concurrency**: TreasuryGland uses a per-instance SQLite connection. If Brain Stem and any other lobe instantiate TreasuryGland separately, they get separate connections with no coordination.
 - **Unrealized PnL uses fill price as market proxy** — `_apply_fill_to_position` sets `market_price = fill_price`. Unrealized PnL goes stale immediately after a fill and is never updated until the next fill.
 - **No SELL intent tracking**: Brain Stem calls `_fire_physical("SELL")` directly without going through `record_intent()` first — sell exits are not pre-recorded as ARMED intents, only as fills.

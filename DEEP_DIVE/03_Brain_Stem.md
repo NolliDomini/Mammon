@@ -162,6 +162,67 @@ Ignored for execution. Only updates `prev_price`.
 
 ---
 
+## 13. Deep Investigation — Sizing, Parameters, and the Three Monte Layers
+
+### Finding A: Trades DO fire — sizing is flat, not risk-based
+
+`frame.command.sizing_mult` is written by **Gatekeeper**, not AllocationGland. The `_sizing_mult()` method:
+```python
+def _sizing_mult(self, approved: bool, final_conf: float) -> float:
+    if not approved:
+        return 0.0
+    base = self.config.get("gatekeeper_sizing_mult", 1.0)  # vault: 0.01
+    return clamp(base, 0.0, 1.0)
+```
+
+From `hormonal_vault.json`: `"gatekeeper_sizing_mult": 0.01`.
+
+When Gatekeeper approves, `sizing_mult = 0.01`. Trigger reads this, `qty_f = 0.01 > 0.0`, payload is valid, the trade arms and fires. **Trades do execute in the live path.**
+
+The sizing is a flat fractional multiplier, not equity-based risk sizing. For BTC at $65,000: `notional = 0.01 × 65,000 = $650` per trade regardless of account size, volatility, or conviction level. AllocationGland's formula (equity × risk_pct × conviction / stop_distance) is never called.
+
+### Finding B: Three separate Monte Carlo systems are running simultaneously
+
+The system runs **three distinct Monte Carlo computations** on every ACTION pulse:
+
+| Layer | Location | Paths | Purpose |
+|---|---|---|---|
+| Monte Carlo Left Hemisphere | TurtleMonte | 30,000 | Weighted 3-lane survival → `frame.risk.monte_score` |
+| Risk Gate (Brain Stem) | `_run_risk_gate()` | ~1,000 | Second survival check, biased by prior conviction → `risk_score` internal only |
+| Valuation Gate (Brain Stem) | `_run_valuation_gate()` | 10,000 | Mean/sigma/bands for z-score and exit levels → stored in `pending_entry`, NOT in `frame.valuation` |
+
+The Brain Stem Risk Gate re-checks `frame.risk.monte_score`'s threshold against its own independent simulation using `brain_stem_sigma` and `brain_stem_bias` to inject a conviction-weighted directional tilt. This is a second opinion, not a delegation to TurtleMonte.
+
+### Finding C: Brain Stem's actual behavior params are NOT in PARAM_KEYS
+
+Pituitary optimizes 23 params (`PARAM_KEYS`). Two of those are Brain Stem params that Trigger **never reads**:
+- `brain_stem_survival` — **unused in trigger/service.py**
+- `brain_stem_noise` — **unused in trigger/service.py**
+
+Params that Trigger **does** read, that are **absent from PARAM_KEYS** (therefore never optimized):
+- `brain_stem_entry_max_z` (Gate 2 z-cap) — default `0.8`
+- `brain_stem_mean_dev_cancel_sigma` (MINT cancel threshold) — default `0.0`
+- `brain_stem_stale_price_cancel_bps` (stale price guard) — default `0.0`
+- `brain_stem_mean_rev_target_sigma` (mean-reversion exit sigma) — default `0.0`
+
+The GP optimizer is spending two dimensions on dead params (`brain_stem_survival`, `brain_stem_noise`) and zero dimensions on the params that actually control Brain Stem's entry/exit behavior.
+
+### Finding D: Trigger computes mean/sigma but does NOT write to `frame.valuation`
+
+`_run_valuation_gate()` produces `{mean, sigma, upper, lower}` locally. These are stored in `pending_entry` (for the ACTION→MINT window) but **never written to `frame.valuation`**. The `ValuationSlot` fields (`mean`, `std_dev`, `z_distance`) remain at zero every pulse. Dashboard Valuation section (Mean, Z-Dist) shows `0.00` and `0.0000` permanently as a result.
+
+Brain Stem does write to `frame.valuation` indirectly through `pending_entry`, but only for internal use between ACTION and MINT — not for the dashboard or the optimizer.
+
+### Finding E: `frame.standards` IS populated
+
+Orchestrator writes Gold params to `frame.standards` at boot:
+```python
+self.frame.standards = self.vault.get("gold", {}).get("params", {})
+```
+And updates it on every vault hot-reload (`_check_vault_mutation()`). AllocationGland's reads of `frame.standards.get("equity")`, `frame.standards.get("risk_per_trade_pct")`, etc. would get correct Gold param values IF AllocationGland were called. The inputs are there; the caller is absent.
+
+---
+
 ## Pons Execution Cost (sibling)
 
 Pre-trade friction model, runs on ACTION only. Computes:
