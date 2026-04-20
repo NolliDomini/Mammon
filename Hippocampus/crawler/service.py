@@ -3,6 +3,7 @@ import numpy as np
 import time
 from typing import Any, Dict, Optional
 from Hippocampus.Archivist.librarian import librarian
+from Hippocampus.Context.mner import emit_mner
 from Pituitary.refinery.service import SynapseRefinery
 
 import uuid
@@ -75,7 +76,13 @@ class ParamCrawler:
             return float(np.mean(fitness_kernel))
         except Exception as e:
             # [CRAWL-E-MINE-1002] REPLAY_KERNEL_FAILED
-            print(f"[CRAWL-E-MINE-1002] REPLAY_KERNEL_FAILED: {e}")
+            emit_mner(
+                "CRAWL-E-MINE-1002",
+                "REPLAY_KERNEL_FAILED",
+                source="Hippocampus.crawler.service.ParamCrawler._replay_params",
+                details={"error": str(e)},
+                echo=True,
+            )
             return 0.0
 
     def _run_mine_mode(self, vault: Dict[str, Any], frame: Any):
@@ -100,7 +107,13 @@ class ParamCrawler:
         tickets = self.refinery.harvest_training_data(hours=lookback)
         if tickets.empty:
             # Piece 243: MNER NO_TICKETS_FOR_REPLAY
-            print(f"[CRAWL-E-MINE-1001] NO_TICKETS_FOR_REPLAY: hours={lookback}")
+            emit_mner(
+                "CRAWL-E-MINE-1001",
+                "NO_TICKETS_FOR_REPLAY",
+                source="Hippocampus.crawler.service.ParamCrawler._run_mine_mode",
+                details={"lookback_hours": lookback},
+                echo=True,
+            )
             return
             
         # 3. Query historical param sets (Piece 229)
@@ -176,7 +189,13 @@ class ParamCrawler:
             avg_titanium_fitness = float(np.mean(soak_scores))
         except Exception as e:
             # Piece 244: MNER SOAK_SCORE_INVALID
-            print(f"[CRAWL-E-PROM-1003] SOAK_SCORE_INVALID: {e}")
+            emit_mner(
+                "CRAWL-E-PROM-1003",
+                "SOAK_SCORE_INVALID",
+                source="Hippocampus.crawler.service.ParamCrawler._run_promote_mode",
+                details={"error": str(e)},
+                echo=True,
+            )
             return
 
         gold_fitness = float(gold.get("fitness_snapshot", gold.get("fitness_estimate", gold.get("fitness", 0.5))))
@@ -218,4 +237,10 @@ class ParamCrawler:
             self.librarian.set_hormonal_vault(vault)
         except Exception as e:
             # Piece 245: MNER PROMOTION_ABORTED
-            print(f"[CRAWL-E-PROM-1004] PROMOTION_ABORTED: {e}")
+            emit_mner(
+                "CRAWL-E-PROM-1004",
+                "PROMOTION_ABORTED",
+                source="Hippocampus.crawler.service.ParamCrawler._run_promote_mode",
+                details={"error": str(e)},
+                echo=True,
+            )

@@ -24,6 +24,8 @@ ROOT_DIR = Path(__file__).resolve().parent
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
+from Hippocampus.Context.mner import emit_mner, read_mner_tail
+
 load_dotenv()
 
 # ------------------------------------------------------------------ #
@@ -60,6 +62,12 @@ def _write_engine_lifecycle_event(event_type: str, **fields) -> None:
             with ENGINE_LIFECYCLE_LOG_PATH.open("a", encoding="utf-8") as fp:
                 fp.write(json.dumps(record, ensure_ascii=True) + "\n")
     except Exception as e:
+        emit_mner(
+            "MNER-W-INFRA-003",
+            "ENGINE_LIFECYCLE_LOG_WRITE_FAILED",
+            source="dashboard._write_engine_lifecycle_event",
+            details={"event_type": event_type, "error": _safe_str(e)},
+        )
         print(f"[DASHBOARD] lifecycle log write failed: {_safe_str(e)}")
 
 
@@ -98,6 +106,12 @@ def _require_infra():
             cur.execute("SELECT 1")
             cur.fetchone()
     except Exception as e:
+        emit_mner(
+            "MNER-E-INFRA-001",
+            "REQUIRED_INFRA_MISSING",
+            source="dashboard._require_infra",
+            details={"error": _safe_str(e, 500)},
+        )
         raise RuntimeError(f"[MNER-E-INFRA-001] REQUIRED_INFRA_MISSING: {e}")
 
 
@@ -480,9 +494,7 @@ def _engine_loop(symbols: list, is_crypto_map: dict):
                 last_furnace_logged_activation = activation_count
 
                 error_msg = str(evt.get("error", "") or "")
-                msg = f"FURNACE | activation={activation_count} | {decision}"
-                if decision == "PIPELINE_ERROR" and error_msg:
-                    msg += f" | error={_clip(error_msg, 160)}"
+                msg = f"FURNACE | {decision}"
 
                 state.push_event(
                     "furnace",
@@ -602,6 +614,18 @@ def _engine_loop(symbols: list, is_crypto_map: dict):
     except Exception as e:
         crash_exc = e
         crash_traceback = traceback.format_exc(limit=50)
+        emit_mner(
+            "MNER-F-CORE-101",
+            "ENGINE_LOOP_CRASH",
+            source="dashboard._engine_loop",
+            details={
+                "run_id": run_id,
+                "mode": current_mode,
+                "symbols": symbols,
+                "exception_type": e.__class__.__name__,
+                "error": _safe_str(e, 500),
+            },
+        )
         state.push_event("error", {
             "msg": f"Engine crash: {_safe_str(e)}",
             "run_id": run_id,
@@ -823,6 +847,17 @@ def api_engine_lifecycle():
     except Exception:
         limit = 100
     events = _read_engine_lifecycle_tail(limit=limit)
+    return jsonify({"status": "ok", "count": len(events), "events": events})
+
+
+@app.route("/api/mner/tail", methods=["GET"])
+def api_mner_tail():
+    raw_limit = request.args.get("limit", "100")
+    try:
+        limit = max(1, min(int(raw_limit), 500))
+    except Exception:
+        limit = 100
+    events = read_mner_tail(limit=limit)
     return jsonify({"status": "ok", "count": len(events), "events": events})
 
 

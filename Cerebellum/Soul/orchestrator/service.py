@@ -15,6 +15,7 @@ from Hippocampus.Archivist.optimizer_librarian import OptimizerLibrarian
 from Hippocampus.Archivist.librarian import librarian
 from Hippocampus.amygdala import Amygdala
 from Hippocampus.pineal import Pineal
+from Hippocampus.Context.mner import emit_mner
 from Pituitary.gland import PituitaryGland
 from Cerebellum.Soul.utils.ward_manager import WardManager
 
@@ -267,7 +268,13 @@ class Orchestrator:
                         walk_seed=walk_seed,
                     )
             except Exception as fe:
-                print(f"[SOUL_ERROR] Furnace failed: {fe}")
+                emit_mner(
+                    "SOUL-E-P35-208",
+                    "FURNACE_RUNTIME_FAILURE",
+                    source="Cerebellum.Soul.orchestrator.service.Orchestrator._process_frame",
+                    details={"error": str(fe), "pulse_type": pulse_type, "symbol": symbol},
+                    echo=True,
+                )
 
             # 6. Signal-Based Decisions
             if self.frame.structure.tier1_signal == 1:

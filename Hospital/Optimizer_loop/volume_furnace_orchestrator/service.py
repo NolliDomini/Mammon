@@ -3,6 +3,7 @@ from typing import Any, Dict, Optional
 
 from Hospital.Optimizer_loop.optimizer_v2 import OptimizerV2Engine, V2Budget
 from Hippocampus.Archivist.optimizer_librarian import OptimizerLibrarian
+from Hippocampus.Context.mner import emit_mner
 
 
 class VolumeFurnaceOrchestrator:
@@ -211,11 +212,6 @@ class VolumeFurnaceOrchestrator:
                 promotion_decision=self.last_summary.get("promotion_decision")
                 or self.last_summary.get("reason"),
             )
-            print(
-                f"[FURNACE_V2] event=pipeline_complete run_id={self.run_id} "
-                f"mint={self.mint_count} activation={self.activation_count} "
-                f"regime_id={regime_ctx} summary={summary}"
-            )
         except Exception as exc:
             self.last_error = str(exc)
             self.last_summary = {}
@@ -226,10 +222,17 @@ class VolumeFurnaceOrchestrator:
                 error=str(exc),
                 context_fallbacks=fallback_flags,
             )
-            print(
-                f"[FURNACE_V2] event=pipeline_error run_id={self.run_id} "
-                f"mint={self.mint_count} activation={self.activation_count} "
-                f"regime_id={regime_ctx} error={exc}"
+            emit_mner(
+                "SOUL-E-P35-208",
+                "FURNACE_PIPELINE_ERROR",
+                source="Hospital.Optimizer_loop.volume_furnace_orchestrator.service.VolumeFurnaceOrchestrator.handle_pulse",
+                details={
+                    "run_id": self.run_id,
+                    "mint": self.mint_count,
+                    "activation": self.activation_count,
+                    "regime_id": regime_ctx,
+                    "error": str(exc),
+                },
             )
 
     def handle_frame(self, *, pulse_type: str, frame: Any, walk_seed: Any = None):
@@ -322,6 +325,18 @@ class VolumeFurnaceOrchestrator:
                 regime_id=regime_ctx,
                 error=str(exc),
                 context_fallbacks=fallback_flags,
+            )
+            emit_mner(
+                "SOUL-E-P35-208",
+                "FURNACE_PIPELINE_ERROR",
+                source="Hospital.Optimizer_loop.volume_furnace_orchestrator.service.VolumeFurnaceOrchestrator.handle_frame",
+                details={
+                    "run_id": self.run_id,
+                    "mint": self.mint_count,
+                    "activation": self.activation_count,
+                    "regime_id": regime_ctx,
+                    "error": str(exc),
+                },
             )
 
     def get_state(self) -> Dict[str, Any]:

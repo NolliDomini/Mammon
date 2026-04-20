@@ -6,6 +6,7 @@ import numpy as np
 import pandas as pd
 
 from Hippocampus.Archivist.librarian import librarian
+from Hippocampus.Context.mner import emit_mner
 
 
 class OpticalTract:
@@ -58,7 +59,17 @@ class OpticalTract:
                 delivered_count += 1
             except Exception as e:
                 failed_count += 1
-                err_msg = f"[CORP-E-P50-407] {type(e).__name__}: {str(e)[:50]}"
+                err_msg = f"{type(e).__name__}: {str(e)[:50]}"
+                emit_mner(
+                    "CORP-E-P50-407",
+                    "OPTICAL_TRACT_DELIVERY_FAILED",
+                    source="Corpus.Optical_Tract.spray.OpticalTract.spray",
+                    details={
+                        "target_lobe": self.subscriber_names[i],
+                        "error": str(e),
+                    },
+                    echo=True,
+                )
                 delivery_details.append(
                     {
                         "lobe": self.subscriber_names[i],

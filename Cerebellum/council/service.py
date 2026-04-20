@@ -12,6 +12,7 @@ from Cerebellum.Soul.brain_frame import BrainFrame
 from Cerebellum.Soul.utils.timing import enforce_pulse_gate
 from Cerebellum.council.spread_engine import SpreadEngine
 from Hippocampus.Archivist.librarian import librarian
+from Hippocampus.Context.mner import emit_mner
 
 
 class Council:
@@ -71,7 +72,13 @@ class Council:
             self.telemetry["status"] = "SUCCESS"
         except Exception as e:
             # SOUL-E-P30-213: Main calculation failure
-            print(f"[SOUL-E-P30-213] COUNCIL: Sequential calc failed: {e}")
+            emit_mner(
+                "SOUL-E-P30-213",
+                "COUNCIL_SEQUENTIAL_CALC_FAILED",
+                source="Cerebellum.council.service.Council.consult",
+                details={"error": str(e)},
+                echo=True,
+            )
             self.telemetry["status"] = f"ERROR:{type(e).__name__}"
             # Fallback for safety
             results = {
@@ -194,7 +201,13 @@ class Council:
             return confidence
         except Exception as e:
             # SOUL-W-P30-214: Council internal math fallback
-            print(f"[SOUL-W-P30-214] COUNCIL: Legacy fallback triggered: {e}")
+            emit_mner(
+                "SOUL-W-P30-214",
+                "COUNCIL_LEGACY_FALLBACK",
+                source="Cerebellum.council.service.Council._consult_legacy_df",
+                details={"error": str(e)},
+                echo=True,
+            )
             return 0.0
 
     def get_state(self) -> Dict[str, Any]:

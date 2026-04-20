@@ -1,0 +1,148 @@
+{
+  "schema_version": "1.0.0",
+  "generated_at": "2026-04-19T00:00:00Z",
+  "format": "LOBE-LEVEL-PIECE-ID",
+  "level_values": [
+    "E",
+    "W",
+    "F"
+  ],
+  "notes": "Runtime-active MNER and legacy bridge codes. Unknown codes are mapped to MNER-E-INFRA-002.",
+  "codes": {
+    "MNER-E-INFRA-001": {
+      "description": "Required infrastructure missing at engine startup.",
+      "owner": "dashboard",
+      "severity": "E"
+    },
+    "MNER-E-INFRA-002": {
+      "description": "Unknown or invalid MNER code emission attempt.",
+      "owner": "telemetry",
+      "severity": "E"
+    },
+    "MNER-W-INFRA-003": {
+      "description": "Lifecycle or telemetry write degraded, runtime continues.",
+      "owner": "dashboard",
+      "severity": "W"
+    },
+    "MNER-F-CORE-101": {
+      "description": "Engine loop hard crash.",
+      "owner": "dashboard",
+      "severity": "F"
+    },
+    "SOUL-E-P30-213": {
+      "description": "Council sequential calculation failed.",
+      "owner": "Cerebellum.council",
+      "severity": "E"
+    },
+    "SOUL-W-P30-214": {
+      "description": "Council legacy fallback triggered.",
+      "owner": "Cerebellum.council",
+      "severity": "W"
+    },
+    "COUNCIL-E-SPR-701": {
+      "description": "Spread engine invalid quote fallback.",
+      "owner": "Cerebellum.council.spread_engine",
+      "severity": "E"
+    },
+    "COUNCIL-E-SPR-702": {
+      "description": "Spread engine missing bid/ask fallback.",
+      "owner": "Cerebellum.council.spread_engine",
+      "severity": "E"
+    },
+    "COUNCIL-E-SPR-703": {
+      "description": "Spread engine normalization failure.",
+      "owner": "Cerebellum.council.spread_engine",
+      "severity": "E"
+    },
+    "COUNCIL-E-SPR-704": {
+      "description": "Spread engine runtime exception.",
+      "owner": "Cerebellum.council.spread_engine",
+      "severity": "E"
+    },
+    "ALLOC-E-SIZE-901": {
+      "description": "Allocation invalid risk inputs.",
+      "owner": "Medulla.allocation_gland",
+      "severity": "E"
+    },
+    "ALLOC-E-SIZE-902": {
+      "description": "Allocation invalid stop distance.",
+      "owner": "Medulla.allocation_gland",
+      "severity": "E"
+    },
+    "ALLOC-E-SIZE-903": {
+      "description": "Allocation risk cap applied.",
+      "owner": "Medulla.allocation_gland",
+      "severity": "E"
+    },
+    "ALLOC-E-SIZE-904": {
+      "description": "Allocation runtime exception.",
+      "owner": "Medulla.allocation_gland",
+      "severity": "E"
+    },
+    "CRAWL-E-MINE-1001": {
+      "description": "Crawler mine mode found no replay tickets.",
+      "owner": "Hippocampus.crawler",
+      "severity": "E"
+    },
+    "CRAWL-E-MINE-1002": {
+      "description": "Crawler replay kernel failed.",
+      "owner": "Hippocampus.crawler",
+      "severity": "E"
+    },
+    "CRAWL-E-PROM-1003": {
+      "description": "Crawler titanium soak score invalid.",
+      "owner": "Hippocampus.crawler",
+      "severity": "E"
+    },
+    "CRAWL-E-PROM-1004": {
+      "description": "Crawler promotion aborted.",
+      "owner": "Hippocampus.crawler",
+      "severity": "E"
+    },
+    "HIPP-E-INFRA-901": {
+      "description": "Librarian Redis unavailable.",
+      "owner": "Hippocampus.Archivist.librarian",
+      "severity": "E"
+    },
+    "HIPP-E-INFRA-902": {
+      "description": "Librarian Timescale unavailable.",
+      "owner": "Hippocampus.Archivist.librarian",
+      "severity": "E"
+    },
+    "CORP-E-P50-407": {
+      "description": "Optical tract fanout delivery failure.",
+      "owner": "Corpus.Optical_Tract",
+      "severity": "E"
+    },
+    "SOUL-E-P35-208": {
+      "description": "Furnace runtime failure inside Soul cycle.",
+      "owner": "Cerebellum.Soul.orchestrator",
+      "severity": "E"
+    },
+    "SOUL-W-P35-215": {
+      "description": "Ward manager janitor sweep warning.",
+      "owner": "Cerebellum.Soul.utils.ward_manager",
+      "severity": "W"
+    },
+    "PONS-E-COST-801": {
+      "description": "Execution cost model input missing.",
+      "owner": "Brain_Stem.pons_execution_cost",
+      "severity": "E"
+    },
+    "PONS-E-COST-802": {
+      "description": "Execution cost model numeric coercion failure.",
+      "owner": "Brain_Stem.pons_execution_cost",
+      "severity": "E"
+    },
+    "PONS-E-COST-803": {
+      "description": "Execution cost model spread estimation failure.",
+      "owner": "Brain_Stem.pons_execution_cost",
+      "severity": "E"
+    },
+    "PONS-E-COST-804": {
+      "description": "Execution cost model fallback failure.",
+      "owner": "Brain_Stem.pons_execution_cost",
+      "severity": "E"
+    }
+  }
+}

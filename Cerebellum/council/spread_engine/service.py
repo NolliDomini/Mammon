@@ -2,6 +2,8 @@ import numpy as np
 import pandas as pd
 from typing import Dict, Any
 
+from Hippocampus.Context.mner import emit_mner
+
 class SpreadEngine:
     """
     Cerebellum/Council: Spread Engine (Piece 44).
@@ -24,7 +26,13 @@ class SpreadEngine:
             df = frame.market.ohlcv
             if df.empty or "bid" not in df.columns or "ask" not in df.columns:
                 # Piece 57: MNER COUNCIL-E-SPR-702
-                print("[COUNCIL-E-SPR-702] SPREAD_ENGINE: Missing bid/ask columns. Using ATR fallback.")
+                emit_mner(
+                    "COUNCIL-E-SPR-702",
+                    "SPREAD_ENGINE_MISSING_INPUTS",
+                    source="Cerebellum.council.spread_engine.service.SpreadEngine.evaluate",
+                    details={"reason": "missing_bid_ask_columns"},
+                    echo=True,
+                )
                 return self._apply_atr_fallback(frame, "missing_inputs")
 
             last_row = df.iloc[-1]
@@ -35,7 +43,13 @@ class SpreadEngine:
             # Piece 48: Invalid Quote Detection
             if bid <= 0 or ask <= 0 or ask < bid:
                 # Piece 56: MNER COUNCIL-E-SPR-701
-                print(f"[COUNCIL-E-SPR-701] SPREAD_ENGINE: Invalid quote data (bid={bid}, ask={ask}). Using ATR fallback.")
+                emit_mner(
+                    "COUNCIL-E-SPR-701",
+                    "SPREAD_ENGINE_INVALID_QUOTE",
+                    source="Cerebellum.council.spread_engine.service.SpreadEngine.evaluate",
+                    details={"bid": bid, "ask": ask},
+                    echo=True,
+                )
                 return self._apply_atr_fallback(frame, "invalid_quote")
 
             # Live Path
@@ -44,7 +58,13 @@ class SpreadEngine:
             return self._finalize_metrics(frame, spread_bps, mid, "live_quote")
         except Exception as e:
             # Piece 59: MNER COUNCIL-E-SPR-704
-            print(f"[COUNCIL-E-SPR-704] SPREAD_ENGINE: Unexpected runtime error: {e}")
+            emit_mner(
+                "COUNCIL-E-SPR-704",
+                "SPREAD_ENGINE_RUNTIME_ERROR",
+                source="Cerebellum.council.spread_engine.service.SpreadEngine.evaluate",
+                details={"error": str(e)},
+                echo=True,
+            )
             self.last_telemetry = {"status": "error", "reason": "runtime_error"}
             # Piece 125: Neutral guard
             frame.environment.spread_score = 0.0
@@ -89,7 +109,13 @@ class SpreadEngine:
             return self.last_telemetry
         except Exception as e:
             # Piece 58: MNER COUNCIL-E-SPR-703
-            print(f"[COUNCIL-E-SPR-703] SPREAD_ENGINE: Normalization failure: {e}")
+            emit_mner(
+                "COUNCIL-E-SPR-703",
+                "SPREAD_ENGINE_NORMALIZATION_FAILURE",
+                source="Cerebellum.council.spread_engine.service.SpreadEngine._finalize_metrics",
+                details={"error": str(e)},
+                echo=True,
+            )
             return {"status": "error", "reason": "normalization_failure"}
 
     def _raw_spread_bps(self, bid: float, ask: float, mid: float) -> float:

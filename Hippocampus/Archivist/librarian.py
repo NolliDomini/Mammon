@@ -11,6 +11,8 @@ from typing import Any, Optional
 from pathlib import Path
 import pandas as pd
 
+from Hippocampus.Context.mner import emit_mner
+
 
 def _install_duckdb_compat_shim():
     # Contract shim for tests that issue sqlite-style introspection SQL against DuckDB.
@@ -898,7 +900,13 @@ class MultiTransportLibrarian:
                 self._redis_conn.ping()
             except Exception as e:
                 mode = os.getenv("MAMMON_MODE", "DRY_RUN").upper()
-                print(f"   [LIBRARIAN_CRITICAL] Redis connection FAILED in {mode} mode: {e}")
+                emit_mner(
+                    "HIPP-E-INFRA-901",
+                    "REDIS_UNAVAILABLE",
+                    source="Hippocampus.Archivist.librarian.Librarian.get_redis_connection",
+                    details={"mode": mode, "error": str(e)},
+                    echo=True,
+                )
                 raise ConnectionError(f"[HIPP-E-INFRA-901] REDIS_UNAVAILABLE mode={mode} err={e}")
         return self._redis_conn
 
@@ -922,7 +930,13 @@ class MultiTransportLibrarian:
                 self._timescale_conn.autocommit = True
             except Exception as e:
                 mode = os.getenv("MAMMON_MODE", "DRY_RUN").upper()
-                print(f"   [LIBRARIAN_CRITICAL] Timescale connection FAILED in {mode} mode: {e}")
+                emit_mner(
+                    "HIPP-E-INFRA-902",
+                    "TIMESCALE_UNAVAILABLE",
+                    source="Hippocampus.Archivist.librarian.Librarian.get_timescale_connection",
+                    details={"mode": mode, "error": str(e)},
+                    echo=True,
+                )
                 raise ConnectionError(f"[HIPP-E-INFRA-902] TIMESCALE_UNAVAILABLE mode={mode} err={e}")
         return self._timescale_conn
 

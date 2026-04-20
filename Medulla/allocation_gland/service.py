@@ -1,6 +1,8 @@
 import numpy as np
 from typing import Dict, Any
 
+from Hippocampus.Context.mner import emit_mner
+
 class AllocationGland:
     """
     Medulla: Allocation Gland (Piece 94).
@@ -56,7 +58,13 @@ class AllocationGland:
             # Piece 106: Invalid Risk Inputs
             if equity <= 0 or risk_pct <= 0:
                 # ALLOC-E-SIZE-901: INVALID_RISK_INPUTS
-                print(f"[ALLOC-E-SIZE-901] ALLOC: Invalid risk inputs (equity={equity}, risk_pct={risk_pct}).")
+                emit_mner(
+                    "ALLOC-E-SIZE-901",
+                    "ALLOC_INVALID_RISK_INPUTS",
+                    source="Medulla.allocation_gland.service.AllocationGland.allocate",
+                    details={"equity": equity, "risk_pct": risk_pct},
+                    echo=True,
+                )
                 raw_qty = 0.0
                 size_reason = "NO_TRADE_ZERO_EQUITY" if equity <= 0 else "NO_TRADE_INVALID_RISK"
             else:
@@ -69,7 +77,13 @@ class AllocationGland:
                     size_reason = "NO_TRADE_ABOVE_MEAN"
                 elif stop_distance <= 0:
                     # Piece 107: MNER ALLOC-E-SIZE-902
-                    print(f"[ALLOC-E-SIZE-902] ALLOC: Zero or negative stop distance ({stop_distance}).")
+                    emit_mner(
+                        "ALLOC-E-SIZE-902",
+                        "ALLOC_STOP_DISTANCE_INVALID",
+                        source="Medulla.allocation_gland.service.AllocationGland.allocate",
+                        details={"stop_distance": stop_distance},
+                        echo=True,
+                    )
                     raw_qty = 0.0
                     size_reason = "NO_TRADE_STOP_INVALID"
                 else:
@@ -86,7 +100,13 @@ class AllocationGland:
             qty = min(raw_qty, max_qty_from_notional, max_qty_cap)
             if qty < raw_qty:
                 # Piece 108: MNER ALLOC-E-SIZE-903
-                print(f"[ALLOC-E-SIZE-903] ALLOC: Risk cap breach. Raw={raw_qty:.4f} -> Capped={qty:.4f}")
+                emit_mner(
+                    "ALLOC-E-SIZE-903",
+                    "ALLOC_RISK_CAP_APPLIED",
+                    source="Medulla.allocation_gland.service.AllocationGland.allocate",
+                    details={"raw_qty": float(raw_qty), "capped_qty": float(qty)},
+                    echo=True,
+                )
                 size_reason = "SIZED_CAP_CLAMPED"
                 
             # 2. Minimum Qty check
@@ -117,7 +137,13 @@ class AllocationGland:
             }
         except Exception as e:
             # Piece 109: MNER ALLOC-E-SIZE-904
-            print(f"[ALLOC-E-SIZE-904] ALLOC: Allocator runtime error: {e}")
+            emit_mner(
+                "ALLOC-E-SIZE-904",
+                "ALLOC_RUNTIME_ERROR",
+                source="Medulla.allocation_gland.service.AllocationGland.allocate",
+                details={"error": str(e)},
+                echo=True,
+            )
             self.last_telemetry = {"status": "error", "msg": str(e)}
             # Piece 127: Fail closed
             frame.command.qty = 0.0
