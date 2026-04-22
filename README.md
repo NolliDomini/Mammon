@@ -74,7 +74,7 @@ Mammon does not "loop"; it **pulses**. Every 5-minute window is divided into thr
 2.  **ACTION (+4.5m)**: Execution phase. Intents are armed and the Gatekeeper evaluates policy.
 3.  **MINT (Rollover)**: Finalization phase. Trades are fired, state is persisted, and the "Synapse Ticket" is minted to the database.
 
-### Runtime Note (2026-04-19)
+### Runtime Note (2026-04-22)
 Current DRY_RUN operations use a scalper-oriented Gold profile:
 - `gold.id = scalp_v1_20260419`
 - lowered gate thresholds (`gatekeeper_min_monte=0.30`, `gatekeeper_min_council=0.44`)
@@ -95,7 +95,7 @@ Execution authority boundaries remain strict:
 ## 🛡️ IV. LEGES MAMMON (THE LAWS)
 The system operates under strict behavioral invariants:
 *   **Inhibitor-First**: The system looks for reasons *not* to trade (Inhibitors) before seeking reasons to trade.
-*   **Stale Data Kill**: Any pulse older than 30 seconds is automatically rejected by the `enforce_pulse_gate()`.
+*   **Stale Data Kill**: Connection drops are caught at the Thalamus poll layer (`THAL-E-CONN-001`), which cancels armed intents and resets to the next clean window. Within a window, the Brain Stem's valuation gate (z-score vs `mean_at_entry`) is the sole guard between `ACTION` and `MINT` — timing-based kill windows have been removed as redundant.
 *   **Zero-Copy State**: The `BrainFrame` is the single source of truth for a pulse; modules write directly to their assigned slots.
 *   **MNER Tracing**: Every failure is logged with a Mammon Neural Error Registry signature: `[LOBE]-[LEVEL]-[PIECE]-[ID]`.
 

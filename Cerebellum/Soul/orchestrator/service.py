@@ -92,8 +92,6 @@ class Orchestrator:
                 print(f"[SOUL_WARN] Crawler unavailable: {ce}")
         self.opt_lib = OptimizerLibrarian()
         self.active_strikes: List[Dict[str, Any]] = [] 
-        self.last_action_ts: Optional[float] = None  # legacy wall-clock anchor
-        self.last_action_market_ts: Optional[pd.Timestamp] = None
 
         # V6: Optical Tract Subscription
         self.optical_tract = optical_tract
@@ -197,36 +195,6 @@ class Orchestrator:
                 except Exception:
                     can_trade = False
 
-            # 1b. Timing Guard Evaluation (Piece 16)
-            timing_inhibited = False
-            if pulse_type == "MINT":
-                max_market_delay = float(self.config.get("action_to_mint_max_market_sec", 90.0))
-                max_wall_delay = float(self.config.get("action_to_mint_max_wall_sec", 90.0))
-                action_market_ts = getattr(self, "last_action_market_ts", None)
-                mint_market_ts = pd.to_datetime(self.frame.market.ts, utc=True, errors="coerce")
-
-                if action_market_ts is not None and pd.notna(mint_market_ts):
-                    elapsed = float((mint_market_ts - action_market_ts).total_seconds())
-                    if elapsed > max_market_delay:
-                        timing_inhibited = True
-                        print(
-                            f"[SOUL] TIMING_INHIBIT: MINT arrived too late "
-                            f"(pulse_dt={elapsed:.1f}s > {max_market_delay:.1f}s)"
-                        )
-                elif self.last_action_ts is not None:
-                    elapsed = time.time() - self.last_action_ts
-                    if elapsed > max_wall_delay:
-                        timing_inhibited = True
-                        print(
-                            f"[SOUL] TIMING_INHIBIT: MINT arrived too late "
-                            f"(wall_dt={elapsed:.1f}s > {max_wall_delay:.1f}s)"
-                        )
-                self.last_action_ts = None
-                self.last_action_market_ts = None
-            elif pulse_type == "ACTION":
-                self.last_action_ts = time.time()
-                action_market_ts = pd.to_datetime(self.frame.market.ts, utc=True, errors="coerce")
-                self.last_action_market_ts = action_market_ts if pd.notna(action_market_ts) else None
 
             # 2. Right Hemisphere (Structure)
             self._run_lobe("Right_Hemisphere", self.lobes["Right_Hemisphere"].on_data_received, metrics, pulse_type, frame=self.frame)
@@ -297,15 +265,8 @@ class Orchestrator:
                 elif pulse_type == "SEED" and lh_ready:
                     self._run_lobe("Left_Hemisphere", self.lobes["Left_Hemisphere"].simulate, metrics, pulse_type, frame=self.frame, walk_seed=walk_seed)
 
-            # MINT finalization path: execute deferred ACTION approvals and disable meanDev monitor.
+            # MINT finalization path: execute deferred ACTION approvals.
             if pulse_type == "MINT" and "Brain_Stem" in self.lobes:
-                # If MINT is too late, we must tell Brain Stem to cancel any pending intent
-                if timing_inhibited:
-                    # We can use a trick here: monkeypatch frame.command.approved temporarily
-                    # so Brain Stem rejects the execution.
-                    self.frame.command.ready_to_fire = False
-                    self.frame.command.reason = f"TIMING_CANCEL (MINT delayed > {max_market_delay:.0f}s)"
-                
                 self._run_lobe(
                     "Brain_Stem",
                     self.lobes["Brain_Stem"].load_and_hunt,

@@ -400,7 +400,7 @@ class TreasuryGland:
         )[0]
         slippage_cost = float(costs["slippage_cost"])
         fee_cost = float(costs["fee_cost"])
-        gross = realized + unrealized + slippage_cost
+        gross = realized + unrealized
         net = gross - slippage_cost - fee_cost
         self.librarian.write_only(
             """
@@ -490,6 +490,26 @@ class TreasuryGland:
             "unrealized_pnl": float(pnl["unrealized"]),
             "source": "sim",
         }
+
+    def mark_to_market(self, symbol: str, market_price: float):
+        rows = self.librarian.read_only(
+            "SELECT qty, avg_price, realized_pnl FROM money_positions WHERE symbol = ? AND mode = ?",
+            (symbol, self.mode),
+        )
+        if not rows or float(rows[0]["qty"]) <= 0:
+            return
+        qty = float(rows[0]["qty"])
+        avg_price = float(rows[0]["avg_price"])
+        realized = float(rows[0]["realized_pnl"])
+        unrealized = (market_price - avg_price) * qty
+        self.librarian.write_only(
+            """
+            UPDATE money_positions
+            SET market_price = ?, unrealized_pnl = ?, updated_at = ?
+            WHERE symbol = ? AND mode = ?
+            """,
+            (market_price, unrealized, time.time(), symbol, self.mode),
+        )
 
     def get_open_positions_count(self) -> int:
         row = self.librarian.read_only(

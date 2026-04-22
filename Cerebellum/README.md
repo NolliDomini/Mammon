@@ -8,7 +8,7 @@ The Cerebellum acts as the central orchestrator (Soul) and the environment evalu
 
 *   **Soul Orchestration**: Enforces the deterministic Triple-Pulse rhythm (`SEED`, `ACTION`, `MINT`) and strict execution order of all downstream lobes.
 *   **BrainFrame**: Owns the zero-copy single source of truth data container. The entire state of a pulse is managed here.
-*   **Pulse Gating**: Implements the 30-second "kill window" for `MINT` pulses to prevent execution on stale data.
+*   **Pulse Gating**: Routes `MINT` pulses directly to Brain Stem for execution. Timing-based kill windows have been removed — the sole entry guard between `ACTION` and `MINT` is the Brain Stem's stddev valuation gate (z-score), which was already computed and baked into the Council score before `ACTION` armed the intent.
 *   **Council (Environment)**: Computes the environment confidence score based on ATR (Volatility), ADX (Trend), Volume, and VWAP distance.
 
 ## Anti-Ownership (What it does NOT do)

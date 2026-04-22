@@ -11,8 +11,9 @@ The Brain Stem is responsible for translating system intent into market action.
     * Risk gate: `risk >= gatekeeper_min_monte`
     * Valuation cap: entry z-score must be `<= brain_stem_entry_max_z`
     * Conviction gate: prior confidence must pass baseline threshold
-*   **Deferred Execution**: Arms intents on the `ACTION` pulse and fires them on the subsequent `MINT` pulse.
-*   **Safety Valves**: Automates exit logic (Stop Loss, Take Profit, Mean Reversion monitor).
+*   **Deferred Execution**: Arms intents on the `ACTION` pulse and fires them unconditionally on the subsequent `MINT` pulse. The `MEAN_DEV_CANCEL` gate between `ACTION` and `MINT` has been removed — the Council already embeds stddev context before `ACTION` fires, making the inter-pulse z-score check redundant.
+*   **Safety Valves**: Automates exit logic (Stop Loss `mean - 1.5σ`, Take Profit `mean + 2.0σ`, Mean Reversion rollover). On every HOLD pulse, `mark_to_market()` is called to keep unrealized P&L live in the treasury.
+*   **SELL Closes Position**: Exit triggers now call `treasury.fire_intent(..., "SELL")` to crystallize realized P&L and zero the position in the ledger.
 *   **Adapter Routing**: Dynamically switches between mock/paper adapters and real Alpaca live execution based on system mode.
 
 ## Current Runtime Defaults (2026-04-19)
@@ -33,5 +34,6 @@ Guardrails are still enforced at Brain Stem/Treasury level:
 *   Does **not** handle internal accounting or PnL ledgers (Medulla).
 
 ## Core Invariants
-*   Must implement the Mean-Dev Monitor to cancel trades that revert too quickly before execution.
 *   Must never execute an order that was not explicitly armed during the preceding `ACTION` pulse.
+*   Must call `mark_to_market()` on every HOLD pulse to keep unrealized P&L current.
+*   Must call `treasury.fire_intent(..., "SELL")` on every exit to close the position in the ledger.

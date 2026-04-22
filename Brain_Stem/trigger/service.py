@@ -248,40 +248,12 @@ class Trigger:
                     return True
 
                 prior = self._get_prior(frame)
-                
-                # V3.3: Use the mean and sigma captured at ACTION to check for reversion
-                mean_ref = self.pending_entry.get("mean_at_entry", price)
-                sigma_ref = max(self.pending_entry.get("sigma_at_entry", 1e-9), 1e-9)
-                z_score = (frame.structure.price - mean_ref) / sigma_ref
-                
-                # V3.3 GATED: Mean reversion kill logic between ACTION and MINT
-                cancel_sigma = float(self.config.get("brain_stem_mean_dev_cancel_sigma", 0.0))
-                cancel_pending = z_score >= cancel_sigma
 
-                if cancel_pending:
-                    self.last_exit_reason = (
-                        f"MEAN_DEV_CANCEL (z={z_score:.2f} >= {cancel_sigma:.2f})"
-                    )
-                    if self.treasury and intent_id:
-                        self.treasury.cancel_intent(intent_id, symbol, self.last_exit_reason)
-                    print(
-                        f"   [BRAIN STEM] MINT CANCEL {symbol} @ {price:.4f} "
-                        f"({self.last_exit_reason})"
-                    )
-                    self._emit_exec_event(
-                        pulse,
-                        "CANCEL",
-                        self.last_exit_reason,
-                        symbol=symbol,
-                        intent_id=intent_id,
-                    )
-                else:
-                    # Execute fire logic
-                    val_data = self._run_valuation_gate(frame, prior, walk_seed)
-                    print(
-                        f"   [BRAIN STEM] MINT FIRE {symbol} @ {price:.4f} "
-                        f"(meanDev monitor OFF)"
-                    )
+                # Execute fire logic
+                val_data = self._run_valuation_gate(frame, prior, walk_seed)
+                print(
+                    f"   [BRAIN STEM] MINT FIRE {symbol} @ {price:.4f}"
+                )
                     fire_result = self._fire_physical(symbol, "BUY", qty, price)
                     if not isinstance(fire_result, dict):
                         fire_result = {"status": "fired", "source": "compat"}
@@ -312,6 +284,7 @@ class Trigger:
                             "side": "LONG",
                             "entry_price": price,
                             "entry_ts": time.time(),
+                            "qty": qty,
                             "bands": self.pending_entry.get("bands", {}),
                             "symbol": symbol,
                             "entry_z": self.pending_entry.get("entry_z", 0.0),
@@ -527,12 +500,22 @@ class Trigger:
             
             if exit_reason:
                 pnl = price - self.position["entry_price"]
+                qty_held = self.position.get("qty", frame.command.sizing_mult)
                 print(f"   [BRAIN STEM] SELL {symbol}: {exit_reason} PnL: {pnl:+.4f}")
                 self.last_exit_reason = exit_reason
-                self._fire_physical(symbol, "SELL", frame.command.sizing_mult, price)
+                self._fire_physical(symbol, "SELL", qty_held, price)
+                if self.treasury:
+                    sell_intent_id = f"{symbol}:{int(time.time()*1000)}:sell"
+                    self.treasury.fire_intent(
+                        sell_intent_id, symbol, "SELL", qty_held, price,
+                        sigma=self.position.get("sigma_at_entry", 0.0),
+                        price_ref=self.position.get("entry_price", price),
+                    )
                 self.position = None
                 self._emit_exec_event(pulse, "EXIT", exit_reason, symbol=symbol, price=price)
             else:
+                if self.treasury:
+                    self.treasury.mark_to_market(symbol, price)
                 print(f"   [BRAIN STEM] HOLD {symbol} @ {price:.4f}")
                 self._emit_exec_event(pulse, "HOLD", "HOLD", symbol=symbol, price=price)
 

@@ -607,6 +607,24 @@ def _engine_loop(symbols: list, is_crypto_map: dict):
                         state.push_event("pulse", event_data)
 
                 except Exception as e:
+                    emit_mner(
+                        "THAL-E-CONN-001",
+                        "DATA_CONNECTION_DROP",
+                        source="dashboard._engine_loop.poll",
+                        details={"symbol": symbol, "error": _safe_str(e, 300)},
+                        echo=True,
+                    )
+                    # Cancel any pending Brain_Stem entry — data is stale, window is lost
+                    try:
+                        bs = orchestrator.lobes.get("Brain_Stem")
+                        if bs and bs.pending_entry:
+                            intent_id = bs.pending_entry.get("intent_id")
+                            if intent_id and bs.treasury:
+                                bs.treasury.cancel_intent(intent_id, symbol, "DATA_CONNECTION_DROP")
+                            bs.pending_entry = None
+                            bs.mean_dev_monitor_active = False
+                    except Exception:
+                        pass
                     state.push_event("error", {"symbol": symbol, "msg": _safe_str(e)})
 
             time.sleep(poll_interval_sec)

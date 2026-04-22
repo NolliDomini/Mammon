@@ -1,5 +1,6 @@
 import pandas as pd
 import numpy as np
+import time
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional
 from alpaca.data.historical import (
@@ -72,13 +73,22 @@ class Thalamus:
         request = CryptoSnapshotRequest(symbol_or_symbols=symbols) if is_crypto else StockSnapshotRequest(symbol_or_symbols=symbols)
         return client.get_crypto_snapshot(request) if is_crypto else client.get_stock_snapshot(request)
 
-    def get_latest_bar(self, symbol: str, is_crypto=True):
+    def get_latest_bar(self, symbol: str, is_crypto=True, retries=3, retry_delay=1.5):
         """Returns the single latest 1m bar available for a symbol."""
-        client = self.crypto_client if is_crypto else self.stock_client
-        if not client: raise ValueError("Client not initialized.")
-        
+        if not (self.crypto_client if is_crypto else self.stock_client):
+            raise ValueError("Client not initialized.")
         request = CryptoLatestBarRequest(symbol_or_symbols=[symbol]) if is_crypto else StockLatestBarRequest(symbol_or_symbols=[symbol])
-        return client.get_crypto_latest_bar(request) if is_crypto else client.get_stock_latest_bar(request)
+        last_exc = None
+        for attempt in range(retries):
+            try:
+                client = self.crypto_client if is_crypto else self.stock_client
+                return client.get_crypto_latest_bar(request) if is_crypto else client.get_stock_latest_bar(request)
+            except Exception as e:
+                last_exc = e
+                if attempt < retries - 1:
+                    time.sleep(retry_delay * (attempt + 1))
+                    self.crypto_client = CryptoHistoricalDataClient(self.api_key, self.api_secret) if self.api_key else CryptoHistoricalDataClient()
+        raise last_exc
 
     def get_state(self) -> Dict[str, Any]:
         """Exposes ingestion events and SmartGland telemetry (Piece 13)."""
