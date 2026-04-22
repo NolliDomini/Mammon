@@ -532,12 +532,6 @@ def _engine_loop(symbols: list, is_crypto_map: dict):
         # Poll loop
         poll_interval_sec = 0.5
         last_seen_bar_ts: Dict[str, Any] = {}
-        last_wallclock_window_start: Optional[int] = None
-        last_wallclock_mint_window_start: Optional[int] = None
-
-        # Initialize wall-clock window tracking to force a MINT on the first boundary
-        current_window_start = int(time.time() // 300) * 300
-        last_wallclock_window_start = current_window_start - 300
 
         while state.running:
             for symbol in symbols:
@@ -551,17 +545,6 @@ def _engine_loop(symbols: list, is_crypto_map: dict):
                 is_crypto = is_crypto_map.get(symbol, True)
 
                 try:
-                    # Piece 14: Wall-clock MINT trigger
-                    now_ts = time.time()
-                    current_window_start = int(now_ts // 300) * 300
-                    if last_wallclock_window_start is not None and current_window_start > last_wallclock_window_start:
-                        mint_window_start = current_window_start - 300
-                        frame = orchestrator.frame
-                        event_data = _frame_to_event(frame, symbol, "MINT", loop_mode)
-                        state.push_event("pulse", event_data)
-                        last_wallclock_window_start = current_window_start
-                        last_wallclock_mint_window_start = mint_window_start
-                        print(f"[DASHBOARD] Wall-clock MINT triggered for {symbol} (Window: {mint_window_start})")
 
                     latest = thalamus.get_latest_bar(symbol=symbol, is_crypto=is_crypto)
                     raw_df, bar_ts = _bar_to_dict(latest, symbol)
@@ -600,10 +583,6 @@ def _engine_loop(symbols: list, is_crypto_map: dict):
                         with state.lock:
                             state.last_frame_dict = event_data
 
-                        if pulse_type == "MINT":
-                            minted_window_start = this_bar_window - 300
-                            if last_wallclock_mint_window_start is not None and minted_window_start == last_wallclock_mint_window_start:
-                                continue
                         state.push_event("pulse", event_data)
 
                 except Exception as e:

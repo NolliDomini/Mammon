@@ -584,3 +584,21 @@ class TreasuryGland:
             "mismatch_count": len(mismatches),
             "mismatches": mismatches,
         }
+
+    def get_open_positions(self) -> list:
+        rows = self.librarian.read_only(
+            """
+            SELECT p.symbol, p.qty, p.avg_price, p.market_price,
+                   o.mean, o.sigma, o.z_score
+            FROM money_positions p
+            LEFT JOIN (
+                SELECT symbol, mean, sigma, z_score, MAX(ts) AS ts
+                FROM money_orders
+                WHERE mode = ? AND side = 'BUY'
+                GROUP BY symbol
+            ) o ON o.symbol = p.symbol
+            WHERE p.mode = ? AND p.qty > 0
+            """,
+            (self.mode, self.mode),
+        )
+        return [dict(r) for r in rows]

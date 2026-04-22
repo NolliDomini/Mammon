@@ -57,6 +57,25 @@ class Trigger:
         self.mean_dev_monitor_active = False
         self.last_execution_event = {}
 
+        # Recover open position state from treasury on restart to keep mark_to_market alive
+        if self.treasury is not None:
+            try:
+                open_pos = self.treasury.get_open_positions()
+                if open_pos:
+                    p = open_pos[0]
+                    self.position = {
+                        "symbol": p["symbol"],
+                        "entry_price": float(p["avg_price"]),
+                        "qty": float(p["qty"]),
+                        "bands": {},
+                        "entry_z": float(p["z_score"] or 0.0),
+                        "mean_at_entry": float(p["mean"] or p["avg_price"]),
+                        "sigma_at_entry": float(p["sigma"] or 1e-9),
+                    }
+                    print(f"[BRAIN STEM] Recovered open position: {p['symbol']} qty={p['qty']} @ {p['avg_price']}")
+            except Exception as e:
+                print(f"[BRAIN STEM] Position recovery failed: {e}")
+
     def set_execution_mode(self, mode: str):
         mode_u = str(mode or "DRY_RUN").upper()
         paper = mode_u == "PAPER"
@@ -254,52 +273,52 @@ class Trigger:
                 print(
                     f"   [BRAIN STEM] MINT FIRE {symbol} @ {price:.4f}"
                 )
-                    fire_result = self._fire_physical(symbol, "BUY", qty, price)
-                    if not isinstance(fire_result, dict):
-                        fire_result = {"status": "fired", "source": "compat"}
-                    if fire_result.get("status") != "fired":
-                        self.last_exit_reason = f"REJECT_ADAPTER_FAILURE ({fire_result.get('msg', 'unknown')})"
-                        if self.treasury and intent_id:
-                            self.treasury.reject_intent(intent_id, symbol, self.last_exit_reason)
-                        self._emit_exec_event(
-                            pulse,
-                            "REJECT",
-                            self.last_exit_reason,
-                            symbol=symbol,
-                            intent_id=intent_id,
-                            adapter=self.execution_adapter,
+                fire_result = self._fire_physical(symbol, "BUY", qty, price)
+                if not isinstance(fire_result, dict):
+                    fire_result = {"status": "fired", "source": "compat"}
+                if fire_result.get("status") != "fired":
+                    self.last_exit_reason = f"REJECT_ADAPTER_FAILURE ({fire_result.get('msg', 'unknown')})"
+                    if self.treasury and intent_id:
+                        self.treasury.reject_intent(intent_id, symbol, self.last_exit_reason)
+                    self._emit_exec_event(
+                        pulse,
+                        "REJECT",
+                        self.last_exit_reason,
+                        symbol=symbol,
+                        intent_id=intent_id,
+                        adapter=self.execution_adapter,
+                    )
+                else:
+                    if self.treasury and intent_id:
+                        self.treasury.fire_intent(
+                            intent_id,
+                            symbol,
+                            "BUY",
+                            qty,
+                            price,
+                            sigma=float(val_data.get("sigma", 0.0)),
+                            price_ref=float(self.pending_entry.get("armed_price", price)),
                         )
-                    else:
-                        if self.treasury and intent_id:
-                            self.treasury.fire_intent(
-                                intent_id,
-                                symbol,
-                                "BUY",
-                                qty,
-                                price,
-                                sigma=float(val_data.get("sigma", 0.0)),
-                                price_ref=float(self.pending_entry.get("armed_price", price)),
-                            )
-                        self.position = {
-                            "side": "LONG",
-                            "entry_price": price,
-                            "entry_ts": time.time(),
-                            "qty": qty,
-                            "bands": self.pending_entry.get("bands", {}),
-                            "symbol": symbol,
-                            "entry_z": self.pending_entry.get("entry_z", 0.0),
-                            "mean_at_entry": self.pending_entry.get("mean_at_entry", price),
-                            "sigma_at_entry": self.pending_entry.get("sigma_at_entry", 1e-9),
-                        }
-                        self._emit_exec_event(
-                            pulse,
-                            "FIRE",
-                            "MINT_FIRED",
-                            symbol=symbol,
-                            intent_id=intent_id,
-                            qty=qty,
-                            price=price,
-                        )
+                    self.position = {
+                        "side": "LONG",
+                        "entry_price": price,
+                        "entry_ts": time.time(),
+                        "qty": qty,
+                        "bands": self.pending_entry.get("bands", {}),
+                        "symbol": symbol,
+                        "entry_z": self.pending_entry.get("entry_z", 0.0),
+                        "mean_at_entry": self.pending_entry.get("mean_at_entry", price),
+                        "sigma_at_entry": self.pending_entry.get("sigma_at_entry", 1e-9),
+                    }
+                    self._emit_exec_event(
+                        pulse,
+                        "FIRE",
+                        "MINT_FIRED",
+                        symbol=symbol,
+                        intent_id=intent_id,
+                        qty=qty,
+                        price=price,
+                    )
             self.pending_entry = None
             self.mean_dev_monitor_active = False
             self.prev_price = frame.structure.price
