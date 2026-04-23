@@ -102,6 +102,17 @@ class SmartGland:
                 if self.raw_list:
                     # Materialize ONLY for aggregation
                     temp_mint_df = pd.DataFrame([x[1:] for x in self.raw_list], index=[x[0] for x in self.raw_list], columns=window_slice.columns)
+
+                    # Guard: if Alpaca delivered the boundary bar before the action bar (bar N+1
+                    # before bar N is confirmed), ACTION was never fired this window. Emit it now
+                    # using the accumulated window data so Brain_Stem can arm before MINT fires.
+                    if not self._action_fired:
+                        action_agg = self._agg_window(temp_mint_df)
+                        if not action_agg.empty:
+                            pulses.append(("ACTION", self._wrap_with_context(action_agg, "ACTION")))
+                            self._action_fired = True
+                            self.telemetry["action_emitted"] += 1
+
                     mint_agg = self._agg_window(temp_mint_df)
                     if not mint_agg.empty:
                         pulses.append(("MINT", self._wrap_with_context(mint_agg, "MINT")))
