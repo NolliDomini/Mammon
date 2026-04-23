@@ -532,6 +532,7 @@ def _engine_loop(symbols: list, is_crypto_map: dict):
         # Poll loop
         poll_interval_sec = 0.5
         last_seen_bar_ts: Dict[str, Any] = {}
+        boot_window_start = int(time.time() // 300) * 300  # First window we entered on this boot
 
         while state.running:
             for symbol in symbols:
@@ -550,9 +551,14 @@ def _engine_loop(symbols: list, is_crypto_map: dict):
                     raw_df, bar_ts = _bar_to_dict(latest, symbol)
                     if raw_df is None or bar_ts is None:
                         continue
-                    
+
                     # Update window tracker from bar data
                     this_bar_window = (int(bar_ts.timestamp()) // 300) * 300
+
+                    # Discard bars from the window before we booted — they would fire
+                    # stale SEED/ACTION into the new window and corrupt the pulse order.
+                    if this_bar_window < boot_window_start:
+                        continue
 
                     prev = last_seen_bar_ts.get(symbol)
                     if prev is not None and bar_ts <= prev:
