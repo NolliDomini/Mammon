@@ -177,8 +177,8 @@ class EngineState:
         self.last_run_duration_sec: float = 0.0
         self.lock = threading.Lock()
 
-        # SSE queues
-        self.sse_queue: queue.Queue = queue.Queue(maxsize=500)
+        # SSE queues (one queue per connected client)
+        self.sse_clients: list[queue.Queue] = []
 
         # Mode gates
         self.mode = "DRY_RUN"
@@ -214,15 +214,26 @@ class EngineState:
             "data": data,
             "ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         }
-        try:
-            self.sse_queue.put_nowait(event)
-        except queue.Full:
-            # Drop oldest to make room
+        stale_clients: list[queue.Queue] = []
+        with self.lock:
+            clients = list(self.sse_clients)
+        for client_q in clients:
             try:
-                self.sse_queue.get_nowait()
-                self.sse_queue.put_nowait(event)
-            except queue.Empty:
-                pass
+                client_q.put_nowait(event)
+            except queue.Full:
+                try:
+                    client_q.get_nowait()
+                    client_q.put_nowait(event)
+                except Exception:
+                    stale_clients.append(client_q)
+            except Exception:
+                stale_clients.append(client_q)
+
+        if stale_clients:
+            with self.lock:
+                for client_q in stale_clients:
+                    if client_q in self.sse_clients:
+                        self.sse_clients.remove(client_q)
 
     def request_stop(self, source: str, reason: str, detail: str = ""):
         """Record stop intent and lower the run flag."""
@@ -518,10 +529,18 @@ def _engine_loop(symbols: list, is_crypto_map: dict):
             "msg": f"Syncing to 5m boundary — waiting {wait_sec:.0f}s",
         })
         print(f"[DASHBOARD] Waiting {wait_sec:.0f}s for next 5m boundary")
-        
+        next_wait_event_at = time.time() + 30.0
         while wait_sec > 0 and state.running:
             time.sleep(min(1.0, wait_sec))
             wait_sec = max(target - time.time(), 0)
+            now_wait = time.time()
+            if now_wait >= next_wait_event_at:
+                state.push_event("system", {
+                    "msg": f"Syncing to 5m boundary — waiting {wait_sec:.0f}s",
+                    "type": "BOUNDARY_WAIT",
+                    "seconds_remaining": int(wait_sec),
+                })
+                next_wait_event_at = now_wait + 30.0
             
         if not state.running:
             return
@@ -532,7 +551,7 @@ def _engine_loop(symbols: list, is_crypto_map: dict):
         # Poll loop
         poll_interval_sec = 0.5
         last_seen_bar_ts: Dict[str, Any] = {}
-        boot_window_start = int(time.time() // 300) * 300  # First window we entered on this boot
+        boot_window_start = int(target)  # Exact boundary we synced to — no race with time.time()
 
         while state.running:
             for symbol in symbols:
@@ -905,14 +924,23 @@ def api_furnace_state():
 @app.route("/api/stream")
 def api_stream():
     """Server-Sent Events stream of live BrainFrame pulses."""
+    client_q: queue.Queue = queue.Queue(maxsize=200)
+    with state.lock:
+        state.sse_clients.append(client_q)
+
     def generate():
-        while True:
-            try:
-                event = state.sse_queue.get(timeout=30)
-                yield f"data: {json.dumps(event)}\n\n"
-            except queue.Empty:
-                # Send keepalive
-                yield f": keepalive\n\n"
+        try:
+            while True:
+                try:
+                    event = client_q.get(timeout=30)
+                    yield f"data: {json.dumps(event)}\n\n"
+                except queue.Empty:
+                    # Send keepalive
+                    yield f": keepalive\n\n"
+        finally:
+            with state.lock:
+                if client_q in state.sse_clients:
+                    state.sse_clients.remove(client_q)
 
     return Response(
         generate(),
@@ -935,11 +963,36 @@ def api_treasury_status():
         from Medulla.treasury.gland import TreasuryGland
         treasury = TreasuryGland(mode=state.mode)
         status = treasury.get_status()
-        return jsonify(status)
+        orders = status.get("orders", {}) if isinstance(status, dict) else {}
+        order_count = int(sum(int(v or 0) for v in orders.values())) if isinstance(orders, dict) else 0
+        fill_count = int(orders.get("fired", 0) or 0) if isinstance(orders, dict) else 0
+        open_positions = int(status.get("open_positions", 0) or 0) if isinstance(status, dict) else 0
+        realized_pnl = float(status.get("realized_pnl", 0.0) or 0.0) if isinstance(status, dict) else 0.0
+        unrealized_pnl = float(status.get("unrealized_pnl", 0.0) or 0.0) if isinstance(status, dict) else 0.0
+        daily_realized = float(treasury.get_realized_pnl_for_day())
+        daily_loss = min(daily_realized, 0.0)
+        payload = {
+            "mode": status.get("mode", state.mode) if isinstance(status, dict) else state.mode,
+            "order_count": order_count,
+            "fill_count": fill_count,
+            "open_positions": open_positions,
+            "realized_pnl": realized_pnl,
+            "unrealized_pnl": unrealized_pnl,
+            "daily_loss": daily_loss,
+            # Backward-compat keys
+            "orders": order_count,
+            "fills": fill_count,
+            "positions": open_positions,
+            "net_pnl": realized_pnl + unrealized_pnl,
+            "drawdown": abs(daily_loss),
+            "win_rate": 0.0,
+        }
+        return jsonify(payload)
     except Exception as e:
         return jsonify({
-            "orders": 0, "fills": 0, "positions": 0,
-            "net_pnl": 0.0, "drawdown": 0.0, "win_rate": 0.0,
+            "order_count": 0, "fill_count": 0, "open_positions": 0,
+            "realized_pnl": 0.0, "unrealized_pnl": 0.0, "daily_loss": 0.0,
+            "orders": 0, "fills": 0, "positions": 0, "net_pnl": 0.0, "drawdown": 0.0, "win_rate": 0.0,
             "error": _safe_str(e, 100),
         })
 
