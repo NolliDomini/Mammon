@@ -183,15 +183,21 @@ class TurtleMonte:
 
     def _log_simulation(self, pulse_type, start_ts, duration, n_steps, paths_per_lane, total_paths, price, atr, stop, council, rates, score):
         try:
-            self.librarian.dispatch("""
-                INSERT INTO turtle_monte_mint(
-                    mode, started_at, finished_at, duration_sec, n_steps, paths_per_lane, 
-                    total_paths, current_price, atr, stop_level, council_score, 
-                    worst_survival, neutral_survival, best_survival, monte_score, pulse_type
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (self.mode, start_ts.isoformat(), datetime.now().isoformat(), duration, n_steps, paths_per_lane, total_paths, price, atr, stop, council, rates[0], rates[1], rates[2], score, pulse_type))
+            self.librarian.mint_monte({
+                "ts": start_ts.isoformat(),
+                "symbol": None,
+                "pulse_type": pulse_type,
+                "n_steps": n_steps,
+                "paths_per_lane": paths_per_lane,
+                "price": price,
+                "atr": atr,
+                "stop_level": stop,
+                "monte_score": score,
+                "worst_survival": rates[0],
+                "neutral_survival": rates[1],
+                "best_survival": rates[2],
+            })
         except Exception:
-            # Audit persistence must not influence runtime policy flow.
             pass
 
     def get_state(self):

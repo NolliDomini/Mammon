@@ -100,10 +100,12 @@ class BrainFrame:
         """Clears ephemeral decision state while preserving context."""
         self.market.pulse_type = pulse_type
 
-        self.environment.bid_ask_bps = 0.0
-        self.environment.spread_score = 0.0
-        self.environment.spread_regime = "UNKNOWN"
-        self.environment.spread_inputs = {}
+        # Spread is valid through MINT — carry ACTION values forward rather than zeroing.
+        if pulse_type != "MINT":
+            self.environment.bid_ask_bps = 0.0
+            self.environment.spread_score = 0.0
+            self.environment.spread_regime = "UNKNOWN"
+            self.environment.spread_inputs = {}
 
         self.valuation = ValuationSlot()
         self.execution = ExecutionSlot()
@@ -116,6 +118,7 @@ class BrainFrame:
         self.command.size_reason = "NONE"
         self.command.risk_used = 0.0
         self.command.cost_adjusted_conviction = 0.0
+        self.command.final_confidence = 0.0
 
     def generate_machine_code(self) -> str:
         """

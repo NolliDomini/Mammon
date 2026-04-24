@@ -265,13 +265,22 @@ def vault() -> dict:
     This is the live parameter set the engine is currently using.
     """
     r = _redis()
-    raw = r.get("mammon:hormonal_vault")
-    if raw is None:
+    key = "mammon:hormonal_vault"
+    if not r.exists(key):
         return {"note": "Vault not in Redis — engine has not started"}
     try:
-        return json.loads(raw)
-    except Exception:
-        return {"raw": raw}
+        raw_hash = r.hgetall(key)
+        decoded = {}
+        for k, v in raw_hash.items():
+            k = k.decode() if isinstance(k, bytes) else k
+            v = v.decode() if isinstance(v, bytes) else v
+            try:
+                decoded[k] = json.loads(v)
+            except Exception:
+                decoded[k] = v
+        return decoded
+    except Exception as e:
+        return {"error": str(e)}
 
 
 @mcp.tool()

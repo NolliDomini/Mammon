@@ -520,11 +520,12 @@ class Trigger:
                 print(f"   [BRAIN STEM] WAIT: {', '.join(reasons)}")
 
         else:
-            # EXIT LOGIC - Recalculate bands every pulse
-            mean = val_data["mean"]
-            lower = val_data["lower"]
-            upper = val_data["upper"]
-            sigma = max(val_data.get("sigma", 0.0), 1e-9)
+            # EXIT LOGIC - Use bands locked at entry; fresh sim only for z-score sigma.
+            entry_bands = self.position.get("bands", {})
+            mean = entry_bands.get("mean", val_data["mean"])
+            lower = entry_bands.get("lower", val_data["lower"])
+            upper = entry_bands.get("upper", val_data["upper"])
+            sigma = max(self.position.get("sigma_at_entry", val_data.get("sigma", 0.0)), 1e-9)
             z_score = (price - mean) / sigma
             mean_rev_target_sigma = float(self.config.get("brain_stem_mean_rev_target_sigma", 0.0))
             

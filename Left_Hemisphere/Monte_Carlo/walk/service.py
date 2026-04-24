@@ -159,27 +159,32 @@ class QuantizedGeometricWalk:
         return seed
 
     def _mint_seed(self, seed: WalkSeed, pulse_type: str):
-        # V3.1 OPTIMIZATION: Non-blocking Async Dispatch via Telepathy
+        ts = datetime.now(timezone.utc).isoformat()
         try:
             self.librarian.write("""
                 INSERT INTO quantized_walk_mint (
-                    ts, symbol, mode, regime_id, mu, sigma, p_jump, jump_mu, jump_sigma, 
+                    ts, symbol, mode, regime_id, mu, sigma, p_jump, jump_mu, jump_sigma,
                     tail_mult, confidence, pulse_type
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
-                datetime.now(timezone.utc).isoformat(),
-                None,
-                seed.mode,
-                seed.regime_id,
-                seed.mu,
-                seed.sigma,
-                seed.p_jump,
-                seed.jump_mu,
-                seed.jump_sigma,
-                seed.tail_mult,
-                seed.confidence,
-                pulse_type,
+                ts, None, seed.mode, seed.regime_id, seed.mu, seed.sigma,
+                seed.p_jump, seed.jump_mu, seed.jump_sigma, seed.tail_mult,
+                seed.confidence, pulse_type,
             ), transport="duckdb")
+        except Exception:
+            pass
+        try:
+            self.librarian.mint_walk({
+                "ts": ts,
+                "symbol": None,
+                "regime_id": seed.regime_id,
+                "mu": seed.mu,
+                "sigma": seed.sigma,
+                "p_jump": seed.p_jump,
+                "confidence": seed.confidence,
+                "mode": seed.mode,
+                "pulse_type": pulse_type,
+            })
         except Exception:
             # Walk persistence is audit-only and must never block risk painting.
             pass

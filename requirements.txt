@@ -4,6 +4,9 @@ flask
 numba
 numpy
 pandas
+psycopg2-binary
+pytz
+redis
 scikit-learn
 scipy
 pytest
