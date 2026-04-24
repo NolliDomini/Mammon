@@ -203,6 +203,10 @@ class Orchestrator:
             # 3. Council (Environment)
             self._run_lobe("Council", self.lobes["Council"].consult, metrics, pulse_type, frame=self.frame)
 
+            # Piece 68: Est. Execution Friction (Pons) - Must run after Council (for ATR/Spread)
+            if pulse_type == "ACTION" and "PonsExecutionCost" in self.lobes:
+                self._run_lobe("PonsExecutionCost", self.lobes["PonsExecutionCost"].estimate, metrics, pulse_type, frame=self.frame)
+
             # 4. Left Hemisphere (Risk Readiness)
             lh_ready = self._run_lobe("Left_Hemisphere", self.lobes["Left_Hemisphere"].on_data_received, metrics, pulse_type, frame=self.frame)
             
@@ -251,6 +255,10 @@ class Orchestrator:
                     self._run_lobe("Left_Hemisphere", self.lobes["Left_Hemisphere"].simulate, metrics, pulse_type, frame=self.frame, walk_seed=walk_seed)
                     self._run_lobe("Corpus", self.lobes["Corpus"].score_tier, metrics, pulse_type, frame=self.frame)
                     self._run_lobe("Gatekeeper", self.lobes["Gatekeeper"].decide, metrics, pulse_type, frame=self.frame)
+
+                    # Piece 94: Allocate Quantity - Must run after Gatekeeper (decision) but before Trigger (firing)
+                    if "AllocationGland" in self.lobes:
+                        self._run_lobe("AllocationGland", self.lobes["AllocationGland"].allocate, metrics, pulse_type, frame=self.frame)
 
                     # Final inhibit if trade gate is locked
                     if self.frame.command.ready_to_fire and not can_trade:

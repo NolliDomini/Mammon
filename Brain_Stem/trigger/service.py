@@ -415,6 +415,14 @@ class Trigger:
         val_data = self._run_valuation_gate(frame, prior, walk_seed)
         bands = val_data
         self.last_trigger_score = risk  # Telemetry
+
+        # Piece 21 Bridge: Write results back to BrainFrame for UI/DB visibility
+        frame.risk.monte_score = float(risk)
+        frame.valuation.mean = float(val_data["mean"])
+        frame.valuation.sigma = float(val_data["sigma"])
+        frame.valuation.upper_band = float(val_data["upper"])
+        frame.valuation.lower_band = float(val_data["lower"])
+        frame.valuation.z_distance = float((price - val_data["mean"]) / max(val_data["sigma"], 1e-9))
         
         # ---- LOGIC ----
         if self.position is None:

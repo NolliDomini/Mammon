@@ -432,6 +432,8 @@ def _engine_loop(symbols: list, is_crypto_map: dict):
         orchestrator.register_lobe("Left_Hemisphere", TurtleMonte(config=dict(gold), mode=current_mode))
         orchestrator.register_lobe("Corpus", Callosum(config=dict(gold), mode=current_mode))
         orchestrator.register_lobe("Gatekeeper", Gatekeeper(config=dict(gold), mode=current_mode))
+        orchestrator.register_lobe("PonsExecutionCost", PonsExecutionCost())
+        orchestrator.register_lobe("AllocationGland", AllocationGland())
         orchestrator.register_lobe(
             "Brain_Stem",
             Trigger(
