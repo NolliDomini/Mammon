@@ -140,8 +140,8 @@ class Callosum:
                 0.5,
                 w_monte,
                 w_right,
-                float(self.config.get("callosum_w_adx", 0.0)),
-                float(self.config.get("callosum_w_weak", 0.0)),
+                0.0,
+                0.0,
                 trace,
                 pulse_type
             ))

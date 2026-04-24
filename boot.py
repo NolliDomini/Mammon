@@ -91,12 +91,29 @@ class MammonBootstrapper:
             raise RuntimeError(f"Librarian transport initialization failed: {e}")
 
     def _check_schemas(self):
+        self._init_timescale_schema()
         report = run_schema_smoke_check(ROOT_DIR)
         if not report.get("ok"):
             print(f"   [BOOT_WARN] Schema drift detected: {len(report.get('critical_drift_issues', []))} critical issues.")
             # If we want to fail on drift, we'd raise an error here.
             # For now, we just log it as per standard Mammon behavior.
         print("   [BOOT] Schema smoke check complete.")
+
+    def _init_timescale_schema(self):
+        sql_path = ROOT_DIR / "scripts" / "migrations" / "timescale_init.sql"
+        if not sql_path.exists():
+            raise RuntimeError(f"Timescale init script missing: {sql_path}")
+
+        sql_text = sql_path.read_text(encoding="utf-8")
+        statements = [stmt.strip() for stmt in sql_text.split(";") if stmt.strip()]
+        if not statements:
+            raise RuntimeError(f"Timescale init script is empty: {sql_path}")
+
+        conn = librarian.get_timescale_connection()
+        with conn.cursor() as cur:
+            for stmt in statements:
+                cur.execute(stmt)
+        print("   [BOOT] Timescale schema initialization complete.")
 
 if __name__ == "__main__":
     boot = MammonBootstrapper()

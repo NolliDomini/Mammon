@@ -18,11 +18,20 @@ PARAM_KEYS = [
     "monte_w_worst", "monte_w_neutral", "monte_w_best",
     "council_w_atr", "council_w_adx", "council_w_vol", "council_w_vwap",
     "gatekeeper_min_monte", "gatekeeper_min_council",
-    "callosum_w_monte", "callosum_w_right", "callosum_w_adx", "callosum_w_weak",
-    "brain_stem_w_turtle", "brain_stem_w_council", "brain_stem_survival",
-    "brain_stem_noise", "brain_stem_sigma", "brain_stem_bias",
+    "callosum_w_monte", "callosum_w_right",
+    "brain_stem_w_turtle", "brain_stem_w_council",
+    "brain_stem_sigma", "brain_stem_bias",
+    "brain_stem_entry_max_z", "brain_stem_mean_dev_cancel_sigma",
+    "brain_stem_stale_price_cancel_bps", "brain_stem_mean_rev_target_sigma",
     "stop_loss_mult", "breakeven_mult"
 ]
+
+PARAM_DEFAULTS = {
+    "brain_stem_entry_max_z": 0.8,
+    "brain_stem_mean_dev_cancel_sigma": 0.0,
+    "brain_stem_stale_price_cancel_bps": 25.0,
+    "brain_stem_mean_rev_target_sigma": 0.0,
+}
 
 @dataclass
 class Hormone:
@@ -260,7 +269,15 @@ class PituitaryGland:
     def _params_to_vector(self, params: Dict[str, Any]) -> Optional[np.ndarray]:
         """Converts a flat param dict to a 23-D numpy vector using PARAM_KEYS order."""
         try:
-            vec = np.array([float(params[k]) for k in PARAM_KEYS])
+            values = []
+            for i, key in enumerate(PARAM_KEYS):
+                if key in params:
+                    values.append(float(params[key]))
+                elif key in PARAM_DEFAULTS:
+                    values.append(float(PARAM_DEFAULTS[key]))
+                else:
+                    values.append(float((MINS[i] + MAXS[i]) / 2.0))
+            vec = np.array(values)
             return vec
         except (KeyError, TypeError, ValueError) as e:
             print(f"   [GP_WARN] Failed to vectorize params: {e}")
@@ -293,6 +310,30 @@ class PituitaryGland:
     # ──────────────────────────────────────────────
     # Existing Pituitary Methods
     # ──────────────────────────────────────────────
+
+    def promote_silver(
+        self,
+        params: Dict[str, Any],
+        fitness: float,
+        regime_id: str = "GLOBAL",
+        source: str = "VolumeFurnace",
+    ) -> bool:
+        """
+        Persist a promoted candidate into the Silver tier for the next GP cycle.
+        """
+        if not isinstance(params, dict) or not params:
+            return False
+        try:
+            self.librarian.record_silver_candidate(
+                params=params,
+                fitness=float(fitness),
+                regime_id=str(regime_id or "GLOBAL"),
+                source=str(source or "VolumeFurnace"),
+            )
+            return True
+        except Exception as e:
+            print(f"[PITUITARY_WARN] Silver promotion failed: {e}")
+            return False
 
     def secrete_platinum(self, regime_id: str, new_params: Dict[str, Any], fitness: float) -> bool:
         """

@@ -19,7 +19,7 @@ class WalkScribe:
         try:
             sql = """
                 SELECT mu
-                FROM walk_mint
+                FROM quantized_walk_mint
                 WHERE regime_id = ?
                 ORDER BY ts DESC
                 LIMIT ?
@@ -29,4 +29,3 @@ class WalkScribe:
         except Exception:
             # Walk discharge is advisory; callers already handle empty shock sets.
             return []
-

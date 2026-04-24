@@ -1,15 +1,16 @@
 import numpy as np
 
 # Definitive 23-Dimensional Search Space for Mammon V3
-# Order: 
+# Order:
 # 0: active_gear
 # 1: monte_noise_scalar
 # 2-4: monte_weights (worst, neutral, best)
 # 5-8: council_weights (atr, adx, vol, vwap)
 # 9-10: gatekeeper_thresholds (min_monte, min_council)
-# 11-14: callosum_weights (monte, right, adx, weak)
-# 15-17: brain_stem_params (w_turtle, w_council, survival)
-# 18-20: brain_stem_scalars (noise, sigma, bias)
+# 11-12: callosum_weights (monte, right)
+# 13-14: brain_stem_weights (w_turtle, w_council)
+# 15-16: brain_stem_scalars (sigma, bias)
+# 17-20: brain_stem_controls (entry/max/cancel/target)
 # 21-22: exits (stop_loss, breakeven)
 
 MINS = np.array([
@@ -18,9 +19,10 @@ MINS = np.array([
     0.0, 0.0, 0.0, # 2-4: Monte Weights
     0.0, 0.0, 0.0, 0.0, # 5-8: Council Weights
     0.1, 0.1, # 9-10: Gatekeeper
-    0.0, 0.0, 0.0, 0.0, # 11-14: Callosum
-    0.0, 0.0, 0.1, # 15-17: BS Logic
-    0.01, 0.05, 0.01, # 18-20: BS Scalars
+    0.0, 0.0, # 11-12: Callosum
+    0.0, 0.0, # 13-14: Brain Stem blend weights
+    0.05, 0.0, # 15-16: sigma, bias
+    0.2, 0.0, 0.0, 0.0, # 17-20: entry/cancel/target controls
     1.5, 1.0  # 21-22: Exits
 ])
 
@@ -30,9 +32,10 @@ MAXS = np.array([
     1.0, 1.0, 1.0, # 2-4: Monte Weights
     1.0, 1.0, 1.0, 1.0, # 5-8: Council Weights
     0.9, 0.9, # 9-10: Gatekeeper
-    1.0, 1.0, 1.0, 1.0, # 11-14: Callosum
-    1.0, 1.0, 0.9, # 15-17: BS Logic
-    0.5, 1.0, 0.5, # 18-20: BS Scalars
+    1.0, 1.0, # 11-12: Callosum
+    1.0, 1.0, # 13-14: Brain Stem blend weights
+    1.0, 0.5, # 15-16: sigma, bias
+    3.0, 5.0, 250.0, 5.0, # 17-20: entry/cancel/target controls
     12.0, 10.0 # 21-22: Exits
 ])
 
@@ -48,14 +51,14 @@ def normalize_weights(raw_row):
     c_sum = np.sum(s[5:9]) + 1e-9
     s[5:9] /= c_sum
     
-    # 3. Callosum (11-14)
-    cl_sum = np.sum(s[11:15]) + 1e-9
-    s[11:15] /= cl_sum
-    
-    # 4. Brain Stem (15-16)
-    bs_sum = np.sum(s[15:17]) + 1e-9
-    s[15:17] /= bs_sum
-    
+    # 3. Callosum (11-12)
+    cl_sum = np.sum(s[11:13]) + 1e-9
+    s[11:13] /= cl_sum
+
+    # 4. Brain Stem (13-14)
+    bs_sum = np.sum(s[13:15]) + 1e-9
+    s[13:15] /= bs_sum
+
     return s
 
 def calculate_batch_fitness(scaled_batch, min_cumsum, dist_to_stop):

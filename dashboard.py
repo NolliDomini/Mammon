@@ -398,6 +398,8 @@ def _engine_loop(symbols: list, is_crypto_map: dict):
         from Medulla.gatekeeper.service import Gatekeeper
         from Brain_Stem.trigger.service import Trigger
         from Hippocampus.telepathy.service import Telepathy
+        from Brain_Stem.pons_execution_cost.service import PonsExecutionCost
+        from Medulla.allocation_gland.service import AllocationGland
 
         # Initialize Async persistence (Scribe Daemon)
         _telepathy = Telepathy()
@@ -592,23 +594,35 @@ def _engine_loop(symbols: list, is_crypto_map: dict):
 
                     if pulses:
                         frame = orchestrator.frame
-                        pulse_type = pulses[-1][0] if isinstance(pulses[-1], (list, tuple)) else str(getattr(pulses[-1], "pulse_type", "MINT"))
-                        event_data = _frame_to_event(
-                            frame, symbol, pulse_type, loop_mode,
-                            bar_dict={
-                                "bar_time": int(bar_ts.timestamp()),
-                                "bar_open": round(float(raw_df.iloc[0]["open"]), 4),
-                                "bar_high": round(float(raw_df.iloc[0]["high"]), 4),
-                                "bar_low": round(float(raw_df.iloc[0]["low"]), 4),
-                                "bar_close": round(float(raw_df.iloc[0]["close"]), 4),
-                                "bar_volume": round(float(raw_df.iloc[0]["volume"]), 2),
-                            },
-                        )
-
-                        with state.lock:
-                            state.last_frame_dict = event_data
-
-                        state.push_event("pulse", event_data)
+                        for pulse_type, pulse_df in pulses:
+                            # Use this pulse's own aggregated OHLCV for the bar display
+                            # so each event shows the price at the moment of that pulse.
+                            if not pulse_df.empty and {"open","high","low","close","volume"}.issubset(pulse_df.columns):
+                                pr = pulse_df.iloc[-1]
+                                pulse_bar_dict = {
+                                    "bar_time": int(bar_ts.timestamp()),
+                                    "bar_open": round(float(pr["open"]), 4),
+                                    "bar_high": round(float(pr["high"]), 4),
+                                    "bar_low": round(float(pr["low"]), 4),
+                                    "bar_close": round(float(pr["close"]), 4),
+                                    "bar_volume": round(float(pr["volume"]), 2),
+                                }
+                            else:
+                                pulse_bar_dict = {
+                                    "bar_time": int(bar_ts.timestamp()),
+                                    "bar_open": round(float(raw_df.iloc[0]["open"]), 4),
+                                    "bar_high": round(float(raw_df.iloc[0]["high"]), 4),
+                                    "bar_low": round(float(raw_df.iloc[0]["low"]), 4),
+                                    "bar_close": round(float(raw_df.iloc[0]["close"]), 4),
+                                    "bar_volume": round(float(raw_df.iloc[0]["volume"]), 2),
+                                }
+                            event_data = _frame_to_event(
+                                frame, symbol, pulse_type, loop_mode,
+                                bar_dict=pulse_bar_dict,
+                            )
+                            with state.lock:
+                                state.last_frame_dict = event_data
+                            state.push_event("pulse", event_data)
 
                 except Exception as e:
                     emit_mner(
@@ -1004,7 +1018,6 @@ def api_treasury_status():
 def api_vault_gold():
     """Returns the current Gold parameter set from the hormonal vault."""
     gold = {}
-    # Primary: try through the librarian (uses Redis if available)
     try:
         from Hippocampus.Archivist.librarian import librarian
         vault = librarian.get_hormonal_vault()
@@ -1012,9 +1025,22 @@ def api_vault_gold():
     except Exception:
         pass
 
+    # Piece 21: Enrich with environment execution defaults
+    params = gold.get("params", {}).copy()
+    if "fee_maker_bps" not in params:
+        params["fee_maker_bps"] = float(os.getenv("MAMMON_FEE_MAKER_BPS", 2.0))
+    if "fee_taker_bps" not in params:
+        params["fee_taker_bps"] = float(os.getenv("MAMMON_FEE_TAKER_BPS", 4.0))
+    if "max_slippage_bps" not in params:
+        params["max_slippage_bps"] = float(os.getenv("MAMMON_MAX_SLIPPAGE_BPS", 5.0))
+    if "risk_per_trade_pct" not in params:
+        params["risk_per_trade_pct"] = float(os.getenv("MAMMON_RISK_PER_TRADE_PCT", 0.01))
+    if "equity" not in params:
+        params["equity"] = float(os.getenv("MAMMON_INITIAL_EQUITY", 10000.0))
+
     return jsonify({
         "id": gold.get("id", "UNKNOWN"),
-        "params": gold.get("params", {}),
+        "params": params,
         "fitness_snapshot": gold.get("fitness_snapshot", 0.0),
         "coronated_at": gold.get("coronated_at", ""),
         "origin": gold.get("origin", ""),

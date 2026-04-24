@@ -92,9 +92,10 @@ except (ImportError, ModuleNotFoundError):
         "monte_w_worst", "monte_w_neutral", "monte_w_best",
         "council_w_atr", "council_w_adx", "council_w_vol", "council_w_vwap", "council_w_spread",
         "gatekeeper_min_monte", "gatekeeper_min_council",
-        "callosum_w_monte", "callosum_w_right", "callosum_w_adx", "callosum_w_weak",
-        "brain_stem_w_turtle", "brain_stem_w_council", "brain_stem_survival",
-        "brain_stem_noise", "brain_stem_sigma", "brain_stem_bias",
+        "callosum_w_monte", "callosum_w_right",
+        "brain_stem_w_turtle", "brain_stem_w_council", "brain_stem_sigma", "brain_stem_bias",
+        "brain_stem_entry_max_z", "brain_stem_mean_dev_cancel_sigma",
+        "brain_stem_stale_price_cancel_bps", "brain_stem_mean_rev_target_sigma",
         "stop_loss_mult", "breakeven_mult",
         "spread_tight_threshold_bps", "spread_normal_threshold_bps", "spread_wide_threshold_bps",
         "spread_score_scalar", "spread_atr_ratio",
@@ -290,6 +291,12 @@ class MultiTransportLibrarian:
         """Piece 142: In-place schema migration for Phase 1 fields."""
         # 1. Synapse Mint (DuckDB)
         conn = self.get_duck_connection()
+        # Keep param columns in sync with runtime PARAM_KEYS across upgrades.
+        for key in PARAM_KEYS:
+            try:
+                conn.execute(f"ALTER TABLE synapse_mint ADD COLUMN {key} DOUBLE")
+            except:
+                pass
         new_cols = [
             ("bid", "DOUBLE"), ("ask", "DOUBLE"), ("bid_size", "DOUBLE"), ("ask_size", "DOUBLE"),
             ("bid_ask_bps", "DOUBLE"), ("spread_score", "DOUBLE"), ("spread_regime", "VARCHAR"),
@@ -388,6 +395,22 @@ class MultiTransportLibrarian:
                 mu DOUBLE,
                 sigma DOUBLE,
                 p_jump DOUBLE,
+                confidence DOUBLE,
+                mode VARCHAR,
+                pulse_type VARCHAR
+            );
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS quantized_walk_mint (
+                ts TIMESTAMP,
+                symbol VARCHAR,
+                regime_id VARCHAR,
+                mu DOUBLE,
+                sigma DOUBLE,
+                p_jump DOUBLE,
+                jump_mu DOUBLE,
+                jump_sigma DOUBLE,
+                tail_mult DOUBLE,
                 confidence DOUBLE,
                 mode VARCHAR,
                 pulse_type VARCHAR
@@ -1023,12 +1046,17 @@ class MultiTransportLibrarian:
         Piece 116: Support for TimescaleDB ledgers.
         V5: Routed through Telepathy for non-blocking execution.
         """
+        transport_l = str(transport or "duckdb").lower()
+        if transport_l in {"duckdb", "timescale"}:
+            # Keep primary transports on their native engines.
+            self.write_direct(sql, params, transport=transport_l)
+            return
         try:
             from Hippocampus.telepathy.service import Telepathy
-            Telepathy().transmit(sql, params, transport=transport)
+            Telepathy().transmit(sql, params, transport=transport_l)
         except (ImportError, Exception):
             # Fallback to direct write if Telepathy is not available (e.g. during early boot)
-            self.write_direct(sql, params, transport=transport)
+            self.write_direct(sql, params, transport=transport_l)
 
     def write_only(self, sql: str, params: tuple = (), transport: str = "duckdb"):
         """
@@ -1086,11 +1114,31 @@ class Librarian:
     `read/write/read_only` interface expected by legacy tests.
     """
 
+    @staticmethod
+    def get_connection(db_path) -> sqlite3.Connection:
+        target = Path(db_path)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        conn = sqlite3.connect(str(target), timeout=30.0)
+        conn.row_factory = sqlite3.Row
+        try:
+            conn.execute("PRAGMA journal_mode=WAL")
+        except Exception:
+            pass
+        try:
+            conn.execute("PRAGMA busy_timeout=5000")
+        except Exception:
+            pass
+        return conn
+
     def __init__(self, db_path=None):
-        self.db_path = str(db_path or (Path.cwd() / "runtime" / ".tmp_test_local" / "compat_librarian.db"))
-        Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
-        self.conn = sqlite3.connect(self.db_path)
-        self.conn.row_factory = sqlite3.Row
+        default_db = (
+            Path(__file__).resolve().parents[2]
+            / "runtime"
+            / ".tmp_test_local"
+            / "compat_librarian.db"
+        )
+        self.db_path = str(Path(db_path) if db_path is not None else default_db)
+        self.conn = self.get_connection(self.db_path)
 
     def setup_schema(self):
         # No-op for compatibility; test flows create tables via callers.

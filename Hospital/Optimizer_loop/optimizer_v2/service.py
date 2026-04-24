@@ -27,14 +27,14 @@ PARAM_KEYS = [
     "gatekeeper_min_council",
     "callosum_w_monte",
     "callosum_w_right",
-    "callosum_w_adx",
-    "callosum_w_weak",
     "brain_stem_w_turtle",
     "brain_stem_w_council",
-    "brain_stem_survival",
-    "brain_stem_noise",
     "brain_stem_sigma",
     "brain_stem_bias",
+    "brain_stem_entry_max_z",
+    "brain_stem_mean_dev_cancel_sigma",
+    "brain_stem_stale_price_cancel_bps",
+    "brain_stem_mean_rev_target_sigma",
     "stop_loss_mult",
     "breakeven_mult",
 ]
@@ -257,7 +257,8 @@ class OptimizerV2Engine:
                 stability=stability,
                 drawdown=float(1.0 - worst),
                 uncertainty=float(1.0 / math.sqrt(n_paths)),
-                slippage_cost=float(cand[18] * 0.4),
+                # Dead-parameter slippage proxy removed; keep neutral cost term.
+                slippage_cost=0.0,
                 score_std=float(np.std([worst, neutral, best])),
             )
             final_score, robust_score = self.guard.compute_scores(rows[i]["candidate_id"], vec)
@@ -276,7 +277,7 @@ class OptimizerV2Engine:
                     "survival": float(neutral),
                     "stability": stability,
                     "drawdown": float(1.0 - worst),
-                    "slippage_adj": float(1.0 - (cand[18] * 0.5)),
+                    "slippage_adj": 1.0,
                     "support_count": int(n_paths),
                 }
             )

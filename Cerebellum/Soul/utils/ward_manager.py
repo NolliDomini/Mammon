@@ -5,8 +5,9 @@ class WardManager:
     Cerebellum/Soul/Utils: The Ward Manager.
     Responsible for pre-flight memory hygiene and janitorial sweeps.
     """
-    def __init__(self):
+    def __init__(self, run_id: str = ""):
         self.librarian = librarian
+        self.run_id = str(run_id or "").strip()
 
     def janitor_sweep(self):
         """
@@ -15,8 +16,9 @@ class WardManager:
         """
         try:
             redis_conn = self.librarian.get_redis_connection()
-            # Find all BrainFrame keys
-            keys = redis_conn.keys("mammon:brain_frame:*")
+            # Non-blocking scan + optional run-id scoping.
+            pattern = f"mammon:brain_frame:{self.run_id}:*" if self.run_id else "mammon:brain_frame:*"
+            keys = list(redis_conn.scan_iter(pattern, count=100))
             if keys:
                 redis_conn.delete(*keys)
                 print(f"[WARD_MANAGER] Janitor Sweep complete. Purged {len(keys)} stale BrainFrames from Redis.")

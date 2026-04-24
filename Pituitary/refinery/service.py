@@ -12,6 +12,8 @@ class SynapseRefinery:
     def __init__(self, synapse_db_path: Optional[Path] = None):
         self.db_path = synapse_db_path or Path(__file__).resolve().parents[2] / "Hippocampus" / "Archivist" / "Ecosystem_Synapse.db"
         self.librarian = Librarian(db_path=self.db_path)
+        self.money_db_path = Path(__file__).resolve().parents[2] / "Hippocampus" / "Archivist" / "Ecosystem_Memory.db"
+        self.money_librarian = Librarian(db_path=self.money_db_path)
 
     def _resolve_time_filter(self) -> tuple[str, str]:
         """
@@ -61,21 +63,73 @@ class SynapseRefinery:
                 print("[REFINERY] Lake is empty. No training data available.")
                 return pd.DataFrame()
 
-            # Calculate 'Surgical Fitness' (How well did the brain predict reality?)
-            # 1. Price vs Active Bounds
-            # 2. Approved Decision vs Final Confidence
-            
-            # Simple fitness proxy: (Close - active_lo) / (active_hi - active_lo) normalized
-            # This is a placeholder; real fitness will correlate to P/L of the trade if approved.
-            df['realized_fitness'] = np.where(
-                (df['active_hi'] - df['active_lo']) > 0,
-                (df['close'] - df['active_lo']) / (df['active_hi'] - df['active_lo']),
-                0.5
+            # Baseline fallback proxy for rows where no money-tape evidence is available.
+            baseline = np.where(
+                (pd.to_numeric(df.get("active_hi"), errors="coerce") - pd.to_numeric(df.get("active_lo"), errors="coerce")) > 0,
+                (
+                    pd.to_numeric(df.get("close"), errors="coerce")
+                    - pd.to_numeric(df.get("active_lo"), errors="coerce")
+                ) / (
+                    pd.to_numeric(df.get("active_hi"), errors="coerce")
+                    - pd.to_numeric(df.get("active_lo"), errors="coerce")
+                ),
+                0.5,
             )
-            
-            # Penalize low confidence approved trades that failed
-            # (Logic for more complex fitness mapping goes here)
-            
+            df["realized_fitness"] = baseline
+
+            # Phase 2-A: replace placeholder fitness with realized PnL / risk_taken when available.
+            pnl_rows = self.money_librarian.read_only(
+                """
+                SELECT ts, symbol, net_pnl
+                FROM money_pnl_snapshots
+                WHERE symbol IS NOT NULL
+                ORDER BY symbol, ts
+                """
+            )
+            pnl_df = pd.DataFrame(pnl_rows)
+            if not pnl_df.empty and "symbol" in df.columns:
+                work = df.copy()
+                work["symbol"] = work["symbol"].astype(str)
+                work["event_ts"] = pd.to_datetime(work.get("ts"), errors="coerce", utc=True)
+                work = work.dropna(subset=["event_ts"]).sort_values(["symbol", "event_ts"])
+
+                pnl_df["symbol"] = pnl_df["symbol"].astype(str)
+                pnl_df["pnl_ts"] = pd.to_datetime(pnl_df["ts"], unit="s", errors="coerce", utc=True)
+                pnl_df["net_pnl"] = pd.to_numeric(pnl_df["net_pnl"], errors="coerce")
+                pnl_df = pnl_df.dropna(subset=["pnl_ts"]).sort_values(["symbol", "pnl_ts"])
+
+                if not work.empty and not pnl_df.empty:
+                    merged = pd.merge_asof(
+                        work,
+                        pnl_df[["symbol", "pnl_ts", "net_pnl"]],
+                        left_on="event_ts",
+                        right_on="pnl_ts",
+                        by="symbol",
+                        direction="backward",
+                    )
+                    risk_used = pd.to_numeric(merged.get("risk_used"), errors="coerce").abs()
+                    notional = pd.to_numeric(merged.get("notional"), errors="coerce").abs()
+                    risk_taken = risk_used.where(risk_used > 0, notional)
+                    risk_taken = risk_taken.where(risk_taken > 0, 1.0)
+
+                    ratio = merged["net_pnl"] / risk_taken
+                    merged["realized_fitness"] = np.clip(ratio, -1.0, 1.0)
+
+                    # Write back only rows where money tape exists; keep baseline elsewhere.
+                    fitness_by_ts = (
+                        merged.dropna(subset=["realized_fitness"])
+                        .set_index(["symbol", "event_ts"])["realized_fitness"]
+                        .to_dict()
+                    )
+                    idx_ts = pd.to_datetime(df.get("ts"), errors="coerce", utc=True)
+                    replacement = [
+                        fitness_by_ts.get((str(sym), ts), np.nan)
+                        for sym, ts in zip(df["symbol"], idx_ts)
+                    ]
+                    replacement_series = pd.Series(replacement, index=df.index, dtype="float64")
+                    has_realized = replacement_series.notna()
+                    df.loc[has_realized, "realized_fitness"] = replacement_series[has_realized]
+
             print(f"[REFINERY] Harvested {len(df)} tickets. Matrix ready.")
             return df
             

@@ -5,6 +5,8 @@ import numpy as np
 import math
 from Hippocampus.Archivist.librarian import Librarian
 from Cerebellum.Soul.brain_frame import BrainFrame
+from Medulla.allocation_gland.service import AllocationGland
+from Medulla.treasury.gland import TreasuryGland
 
 
 @dataclass
@@ -52,6 +54,12 @@ class Gatekeeper:
         self.config = config or {}
         self.mode = mode
         self.librarian = Librarian()
+        self.allocation = AllocationGland()
+        self.treasury: Optional[TreasuryGland] = None
+        try:
+            self.treasury = TreasuryGland(mode=str(mode or "DRY_RUN").upper(), config=self.config)
+        except Exception:
+            self.treasury = None
         self.last_telemetry: Dict[str, Any] = {}
 
     def decide(self, pulse_type: str, frame: BrainFrame):
@@ -101,7 +109,10 @@ class Gatekeeper:
                 reason = "INHIBIT_THRESHOLD_COUNCIL"
 
         final_conf = self._clamp((tier_score + council_score) / 2.0, 0.0, 1.0)
-        sizing = self._sizing_mult(ready, final_conf)
+        sizing, sizing_meta = self._sizing_mult(ready, final_conf, frame)
+        if ready and sizing <= 0.0:
+            ready = False
+            reason = "INHIBIT_SIZE_ZERO"
 
         # Gatekeeper write boundary: frame.command only.
         frame.command.ready_to_fire = bool(ready)
@@ -110,6 +121,13 @@ class Gatekeeper:
         frame.command.final_confidence = final_conf
         frame.command.confidence_score = final_conf
         frame.command.sizing_mult = sizing
+        frame.command.qty = float(sizing)
+        frame.command.notional = float(sizing_meta["price"] * sizing)
+        frame.command.risk_used = float(sizing_meta["risk_used"])
+        frame.command.cost_adjusted_conviction = float(final_conf)
+        frame.command.size_reason = (
+            "SIZED_ALLOCATION" if ready and sizing > 0.0 else sizing_meta.get("reason", "NO_TRADE")
+        )
 
         self.last_telemetry = {
             "pulse_type": pulse,
@@ -123,6 +141,7 @@ class Gatekeeper:
                 "min_council": min_council,
                 "comparator": cmp_mode,
             },
+            "sizing": sizing_meta,
             "result": {
                 "ready_to_fire": bool(ready),
                 "approved": int(frame.command.approved),
@@ -154,11 +173,83 @@ class Gatekeeper:
             return value >= threshold
         return value > threshold
 
-    def _sizing_mult(self, approved: bool, final_conf: float) -> float:
+    def _sizing_mult(self, approved: bool, final_conf: float, frame: BrainFrame) -> tuple[float, Dict[str, float]]:
         if not approved:
-            return 0.0
-        base = self._sanitize_numeric(self.config.get("gatekeeper_sizing_mult", 1.0), default=1.0)
-        return self._clamp(base, 0.0, 1.0)
+            return 0.0, {"reason": "NOT_APPROVED", "price": 0.0, "risk_used": 0.0}
+
+        standards = getattr(frame, "standards", {}) or {}
+        price = self._sanitize_numeric(
+            getattr(getattr(frame, "structure", None), "price", standards.get("price", 0.0)),
+            default=0.0,
+        )
+        active_lo = self._sanitize_numeric(
+            getattr(getattr(frame, "structure", None), "active_lo", standards.get("active_lo", 0.0)),
+            default=0.0,
+        )
+        atr = self._sanitize_numeric(
+            getattr(getattr(frame, "environment", None), "atr", standards.get("atr", 0.0)),
+            default=0.0,
+        )
+        stop_distance = abs(price - active_lo)
+        if stop_distance <= 0.0 and atr > 0.0:
+            stop_distance = atr
+
+        risk_pct = self._sanitize_numeric(
+            standards.get("risk_per_trade_pct", self.config.get("risk_per_trade_pct", 0.01)),
+            default=0.01,
+        )
+        risk_pct = self._clamp(risk_pct, 0.0, 1.0)
+
+        baseline_equity = self._sanitize_numeric(
+            standards.get("equity", self.config.get("equity", 10000.0)),
+            default=10000.0,
+        )
+        equity = baseline_equity
+        if self.treasury is not None:
+            try:
+                equity = self._sanitize_numeric(
+                    self.treasury.get_account_equity(baseline_equity=baseline_equity),
+                    default=baseline_equity,
+                )
+            except Exception:
+                equity = baseline_equity
+
+        qty = self.allocation.compute(
+            equity=equity,
+            risk_pct=risk_pct,
+            conviction=final_conf,
+            stop_distance=stop_distance,
+        )
+
+        max_notional = self._sanitize_numeric(
+            standards.get(
+                "max_notional",
+                standards.get("max_notional_per_order", self.config.get("max_notional", 0.0)),
+            ),
+            default=0.0,
+        )
+        if max_notional > 0.0 and price > 0.0:
+            qty = min(qty, max_notional / price)
+
+        max_qty = self._sanitize_numeric(standards.get("max_qty", self.config.get("max_qty", 0.0)), default=0.0)
+        if max_qty > 0.0:
+            qty = min(qty, max_qty)
+
+        min_qty = self._sanitize_numeric(standards.get("min_qty", self.config.get("min_qty", 0.0)), default=0.0)
+        if qty > 0.0 and min_qty > 0.0 and qty < min_qty:
+            qty = 0.0
+
+        risk_used = 0.0
+        if equity > 0.0 and stop_distance > 0.0:
+            risk_used = (qty * stop_distance) / equity
+        return float(max(0.0, qty)), {
+            "equity": float(equity),
+            "risk_pct": float(risk_pct),
+            "stop_distance": float(stop_distance),
+            "price": float(price),
+            "risk_used": float(max(0.0, risk_used)),
+            "reason": "OK" if qty > 0.0 else "NO_TRADE_ZERO_QTY",
+        }
 
     def _sanitize_numeric(self, value: Any, default: float) -> float:
         try:
@@ -217,7 +308,7 @@ class Gatekeeper:
 
     def _log_decision(self, cmd, tier_score, council_score, min_tier, min_council, pulse_type):
         try:
-            self.librarian.dispatch("""
+            self.librarian.write("""
                 INSERT INTO gatekeeper_mint(
                     mode, tier_id, signal_type, tier_score, council_score,
                     min_tier_score, min_council_score,

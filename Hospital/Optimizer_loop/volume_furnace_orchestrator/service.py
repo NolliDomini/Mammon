@@ -1,4 +1,5 @@
 import uuid
+import json
 from typing import Any, Dict, Optional
 
 from Hospital.Optimizer_loop.optimizer_v2 import OptimizerV2Engine, V2Budget
@@ -18,6 +19,7 @@ class VolumeFurnaceOrchestrator:
         simulation_mode: bool = False,
         external_cadence: bool = False,
         execution_mode: str = "DRY_RUN",
+        pituitary: Any = None,
     ):
         self.run_id = f"forge-v2-{uuid.uuid4().hex[:8]}"
         self.execution_mode = str(execution_mode or "DRY_RUN").upper()
@@ -32,6 +34,7 @@ class VolumeFurnaceOrchestrator:
         self.last_error: Optional[str] = None
         self.telemetry: list[Dict[str, Any]] = []
         self.telemetry_limit = 200
+        self.pituitary = pituitary
 
         self.opt_lib = OptimizerLibrarian()
         self.opt_lib.setup_schema()
@@ -49,6 +52,53 @@ class VolumeFurnaceOrchestrator:
             f"external_cadence={self.external_cadence} "
             f"mode=STAGE_A_H_ACTIVE"
         )
+
+    def _load_winner_params(self, candidate_id: str) -> Optional[Dict[str, Any]]:
+        if not candidate_id:
+            return None
+        try:
+            rows = self.opt_lib.read_only(
+                "SELECT param_json FROM optimizer_candidate_library WHERE candidate_id = ? LIMIT 1",
+                (candidate_id,),
+            )
+            if not rows:
+                return None
+            payload = rows[0].get("param_json")
+            if not payload:
+                return None
+            parsed = json.loads(payload)
+            return parsed if isinstance(parsed, dict) else None
+        except Exception:
+            return None
+
+    def _promote_winner_to_silver(self, summary: Dict[str, Any], regime_id: str):
+        if self.pituitary is None or not isinstance(summary, dict):
+            return
+        if not bool(summary.get("promoted")):
+            return
+
+        candidate_id = str(summary.get("winner_candidate_id") or "")
+        winner_params = self._load_winner_params(candidate_id)
+        if not winner_params:
+            summary["silver_promoted"] = False
+            summary["silver_promotion_reason"] = "WINNER_PARAMS_MISSING"
+            return
+
+        winner_score = float(summary.get("winner_robust_score", 0.0) or 0.0)
+        try:
+            promoted = bool(
+                self.pituitary.promote_silver(
+                    params=winner_params,
+                    fitness=winner_score,
+                    regime_id=str(regime_id or "GLOBAL"),
+                    source="VolumeFurnace",
+                )
+            )
+            summary["silver_promoted"] = promoted
+            summary["silver_promotion_reason"] = "OK" if promoted else "PITUITARY_REJECTED"
+        except Exception as exc:
+            summary["silver_promoted"] = False
+            summary["silver_promotion_reason"] = f"PITUITARY_ERROR:{exc}"
 
     def set_execution_mode(self, execution_mode: str):
         mode = str(execution_mode or "DRY_RUN").upper()
@@ -202,6 +252,7 @@ class VolumeFurnaceOrchestrator:
                 mutations=mutations,
             )
             self.last_summary = summary if isinstance(summary, dict) else {"result": summary}
+            self._promote_winner_to_silver(self.last_summary, regime_ctx)
             self.last_error = None
             self._record_decision(
                 "EXECUTED",
@@ -305,6 +356,7 @@ class VolumeFurnaceOrchestrator:
                 mutations=mutations,
             )
             self.last_summary = summary if isinstance(summary, dict) else {"result": summary}
+            self._promote_winner_to_silver(self.last_summary, regime_ctx)
             self.last_error = None
             self._record_decision(
                 "EXECUTED",

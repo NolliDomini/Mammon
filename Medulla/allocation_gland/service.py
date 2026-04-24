@@ -11,6 +11,23 @@ class AllocationGland:
     def __init__(self):
         self.last_telemetry = {}
 
+    @staticmethod
+    def compute(equity: float, risk_pct: float, conviction: float, stop_distance: float) -> float:
+        """
+        Deterministic sizing kernel used by Gatekeeper runtime.
+        qty = (equity * risk_pct * conviction) / stop_distance
+        """
+        try:
+            equity_f = float(equity)
+            risk_f = float(risk_pct)
+            conviction_f = float(np.clip(float(conviction), 0.0, 1.0))
+            stop_f = abs(float(stop_distance))
+        except Exception:
+            return 0.0
+        if equity_f <= 0.0 or risk_f <= 0.0 or stop_f <= 0.0:
+            return 0.0
+        return float(max(0.0, (equity_f * risk_f * conviction_f) / stop_f))
+
     def allocate(self, pulse_type: str, frame: Any):
         """
         Piece 94: Core allocation contract.
@@ -26,18 +43,24 @@ class AllocationGland:
             
             # Piece 97: Raw Conviction
             # formula: clamp(z_distance / max_z, 0.0, 1.0)
-            max_z = frame.standards.get("max_z", 2.0)
+            max_z = frame.standards.get("alloc_max_z", frame.standards.get("max_z", 2.0))
             raw_conviction = np.clip(z_distance / max_z, 0.0, 1.0)
             
             # Piece 99: Cost Penalty
             # formula: total_cost_bps / cost_penalty_divisor
             total_cost_bps = frame.execution.total_cost_bps
-            cost_penalty_divisor = frame.standards.get("cost_penalty_divisor", 100.0)
+            cost_penalty_divisor = frame.standards.get(
+                "alloc_cost_penalty_divisor",
+                frame.standards.get("cost_penalty_divisor", 100.0),
+            )
             cost_penalty = total_cost_bps / cost_penalty_divisor if cost_penalty_divisor > 0 else 0.0
             
             # Piece 100: Adjusted Conviction
             # formula: raw_conviction * (1.0 - clamp(cost_penalty, 0, max_cost_penalty))
-            max_cost_penalty = frame.standards.get("max_cost_penalty", 0.5)
+            max_cost_penalty = frame.standards.get(
+                "alloc_max_cost_penalty",
+                frame.standards.get("max_cost_penalty", 0.5),
+            )
             clamped_penalty = np.clip(cost_penalty, 0.0, max_cost_penalty)
             adjusted_conviction = raw_conviction * (1.0 - clamped_penalty)
             
@@ -46,8 +69,11 @@ class AllocationGland:
             
             # Piece 101: Raw Quantity
             # formula: (equity * risk_per_trade_pct * adjusted_conviction) / stop_distance
-            equity = frame.standards.get("equity", 10000.0)
-            risk_pct = frame.standards.get("risk_per_trade_pct", 0.01) # 1% default
+            equity = frame.standards.get("alloc_equity", frame.standards.get("equity", 10000.0))
+            risk_pct = frame.standards.get(
+                "alloc_risk_per_trade_pct",
+                frame.standards.get("risk_per_trade_pct", 0.01),
+            ) # 1% default
             
             # C2 fix: Initialize defaults before branch to prevent NameError
             price = float(frame.structure.price) if hasattr(frame.structure, 'price') else 0.0
@@ -92,8 +118,14 @@ class AllocationGland:
                         size_reason = "SIZED_COST_PENALIZED"
                 
             # Piece 102: Hard Caps
-            max_notional = frame.standards.get("max_notional", 10000.0)
-            max_qty_cap = frame.standards.get("max_qty", 100.0)  # C3 fix: enforce max_qty
+            max_notional = frame.standards.get(
+                "alloc_max_notional",
+                frame.standards.get("max_notional", 10000.0),
+            )
+            max_qty_cap = frame.standards.get(
+                "alloc_max_qty",
+                frame.standards.get("max_qty", 100.0),
+            )  # C3 fix: enforce max_qty
             max_qty_from_notional = max_notional / price if price > 0 else 0.0
             
             # 1. Quantity Cap (notional AND absolute)
@@ -110,7 +142,7 @@ class AllocationGland:
                 size_reason = "SIZED_CAP_CLAMPED"
                 
             # 2. Minimum Qty check
-            min_qty = frame.standards.get("min_qty", 0.001)
+            min_qty = frame.standards.get("alloc_min_qty", frame.standards.get("min_qty", 0.001))
             if qty > 0 and qty < min_qty:
                 qty = 0.0
                 size_reason = "NO_TRADE_BELOW_MIN"

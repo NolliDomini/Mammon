@@ -88,16 +88,24 @@ class Pineal:
                 print("[PINEAL] No staged synapse tickets to finalize.")
                 return
 
-            archived = int(pond.archive_history_synapse(run_id=run_id))
-            print(f"[PINEAL] Archived {archived:,} staged brainframes.")
-
             if consumed_by_diamond:
-                pond.clear_history_synapse()
-                print(
-                    f"[PINEAL] Pineal wipe complete: cleared {count:,} staged synapse "
-                    "tickets and checkpoints after Diamond consumption."
-                )
+                if hasattr(pond, "archive_and_clear_history_synapse"):
+                    archived = int(pond.archive_and_clear_history_synapse(run_id=run_id))
+                    print(
+                        f"[PINEAL] Archived and wiped {archived:,} staged brainframes "
+                        "after Diamond consumption."
+                    )
+                else:
+                    archived = int(pond.archive_history_synapse(run_id=run_id))
+                    print(f"[PINEAL] Archived {archived:,} staged brainframes.")
+                    pond.clear_history_synapse()
+                    print(
+                        f"[PINEAL] Pineal wipe complete: cleared {count:,} staged synapse "
+                        "tickets and checkpoints after Diamond consumption."
+                    )
             else:
+                archived = int(pond.archive_history_synapse(run_id=run_id))
+                print(f"[PINEAL] Archived {archived:,} staged brainframes.")
                 print("[PINEAL] Staged synapse retained (Diamond did not consume this run).")
         except Exception as e:
             print(f"[PINEAL_ERROR] finalize_fornix_staging failed: {e}")

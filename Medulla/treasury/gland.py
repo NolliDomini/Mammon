@@ -1,9 +1,17 @@
 import time
 import json
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Dict, Any
 
 from Hippocampus.Archivist.librarian import Librarian
+
+_DEFAULT_MONEY_DB = (
+    Path(__file__).resolve().parents[2]
+    / "Hippocampus"
+    / "Archivist"
+    / "Ecosystem_Memory.db"
+)
 
 
 class TreasuryGland:
@@ -15,7 +23,7 @@ class TreasuryGland:
     def __init__(self, mode: str = "DRY_RUN", config: Dict[str, Any] = None, librarian: Librarian = None):
         self.mode = (mode or "DRY_RUN").upper()
         self.config = config or {}
-        self.librarian = librarian or Librarian()
+        self.librarian = librarian or Librarian(db_path=_DEFAULT_MONEY_DB)
         self._init_schema()
 
     def _init_schema(self):
@@ -420,6 +428,31 @@ class TreasuryGland:
             """,
             (time.time(), event_type, intent_id, symbol, payload_json),
         )
+
+    def get_account_equity(self, baseline_equity: float = 10000.0) -> float:
+        """
+        Equity proxy for risk sizing: baseline cash plus realized/unrealized PnL.
+        """
+        try:
+            baseline = float(self.config.get("equity_baseline", baseline_equity))
+        except Exception:
+            baseline = float(baseline_equity)
+        row = self.librarian.read_only(
+            """
+            SELECT COALESCE(SUM(realized_pnl), 0.0) AS realized,
+                   COALESCE(SUM(unrealized_pnl), 0.0) AS unrealized
+            FROM money_positions
+            WHERE mode = ?
+            """,
+            (self.mode,),
+        )
+        if row:
+            realized = float(row[0].get("realized", 0.0) or 0.0)
+            unrealized = float(row[0].get("unrealized", 0.0) or 0.0)
+        else:
+            realized = 0.0
+            unrealized = 0.0
+        return float(max(0.0, baseline + realized + unrealized))
 
     def get_status(self) -> Dict[str, Any]:
         # Piece 11: Explicit mode isolation

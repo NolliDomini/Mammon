@@ -2,8 +2,8 @@ import numpy as np
 import pandas as pd
 from dataclasses import dataclass
 from typing import Dict, Any, Optional, List
-from pathlib import Path
-from Hippocampus.Archivist.librarian import Librarian
+from datetime import datetime, timezone
+from Hippocampus.Archivist.librarian import librarian
 from Hippocampus.Archivist.walk_scribe import WalkScribe
 
 @dataclass
@@ -31,8 +31,7 @@ class QuantizedGeometricWalk:
     """
     def __init__(self, mode: str = "TEST"):
         self.mode = mode
-        db_path = Path(__file__).resolve().parents[3] / "Hippocampus" / "Archivist" / "Ecosystem_Memory.db"
-        self.librarian = Librarian(db_path=db_path)
+        self.librarian = librarian
         self.scribe = None # Lazy Init with context
         self.last_walk_event: Dict[str, Any] = {}
 
@@ -141,7 +140,10 @@ class QuantizedGeometricWalk:
             frame.risk.mu = seed.mu
             frame.risk.sigma = seed.sigma
             frame.risk.p_jump = seed.p_jump
-            frame.risk.regime_id = seed.regime_id
+            # Preserve Council's canonical regime_id and persist walk-specific key separately.
+            frame.risk.walk_regime_id = seed.regime_id
+            if not getattr(frame.risk, "regime_id", None):
+                frame.risk.regime_id = seed.regime_id
             frame.risk.shocks = list(seed.mutations or [])
             frame.risk.mutations = list(seed.mutations or [])
         self.last_walk_event = {
@@ -159,13 +161,25 @@ class QuantizedGeometricWalk:
     def _mint_seed(self, seed: WalkSeed, pulse_type: str):
         # V3.1 OPTIMIZATION: Non-blocking Async Dispatch via Telepathy
         try:
-            self.librarian.dispatch("""
+            self.librarian.write("""
                 INSERT INTO quantized_walk_mint (
-                    mode, regime_id, mu, sigma, p_jump, jump_mu, jump_sigma, 
+                    ts, symbol, mode, regime_id, mu, sigma, p_jump, jump_mu, jump_sigma, 
                     tail_mult, confidence, pulse_type
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (seed.mode, seed.regime_id, seed.mu, seed.sigma, seed.p_jump, 
-                  seed.jump_mu, seed.jump_sigma, seed.tail_mult, seed.confidence, pulse_type))
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                datetime.now(timezone.utc).isoformat(),
+                None,
+                seed.mode,
+                seed.regime_id,
+                seed.mu,
+                seed.sigma,
+                seed.p_jump,
+                seed.jump_mu,
+                seed.jump_sigma,
+                seed.tail_mult,
+                seed.confidence,
+                pulse_type,
+            ), transport="duckdb")
         except Exception:
             # Walk persistence is audit-only and must never block risk painting.
             pass

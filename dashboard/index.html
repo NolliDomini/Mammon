@@ -40,30 +40,32 @@
     <!-- LEFT NEXUS (KPIs) -->
     <div class="nexus-trigger left"></div>
     <div class="nexus-drawer left">
-      <div class="v-card-header">Vault KPIs</div>
-      <div class="kpi-row">
-        <div class="k">Orders</div>
-        <div class="v" id="dryOrders">0</div>
-      </div>
-      <div class="kpi-row">
-        <div class="k">Fills</div>
-        <div class="v" id="dryFills">0</div>
-      </div>
-      <div class="kpi-row">
-        <div class="k">Positions</div>
-        <div class="v" id="dryPositions">0</div>
-      </div>
-      <div class="kpi-row">
-        <div class="k">Net PnL</div>
-        <div class="v" id="dryNetPnl">$0.00</div>
-      </div>
-      <div class="kpi-row">
-        <div class="k">Drawdown</div>
-        <div class="v" id="dryDrawdown">$0.00</div>
-      </div>
-      <div class="kpi-row">
-        <div class="k">Win Rate</div>
-        <div class="v" id="dryWinRate">0.0%</div>
+      <div class="v-card-header">Vault Performance</div>
+      <div class="kpi-grid">
+        <div class="kpi-card">
+          <div class="k">Orders</div>
+          <div class="v" id="dryOrders">0</div>
+        </div>
+        <div class="kpi-card">
+          <div class="k">Fills</div>
+          <div class="v" id="dryFills">0</div>
+        </div>
+        <div class="kpi-card highlight">
+          <div class="k">Positions</div>
+          <div class="v" id="dryPositions">0</div>
+        </div>
+        <div class="kpi-card highlight">
+          <div class="k">Net PnL</div>
+          <div class="v" id="dryNetPnl">$0.00</div>
+        </div>
+        <div class="kpi-card">
+          <div class="k">Unrealized</div>
+          <div class="v" id="dryDrawdown">$0.00</div>
+        </div>
+        <div class="kpi-card warn">
+          <div class="k">Daily Loss</div>
+          <div class="v" id="dryWinRate">$0.00</div>
+        </div>
       </div>
       <div style="margin-top:auto; font-size:11px; color:var(--muted); text-align:center;">EXIT: HOVER MAIN STAGE</div>
     </div>
@@ -269,106 +271,59 @@
       <div class="pg-group weight-1">
         <div class="pg-title">Strategy</div>
         <div class="pg-grid">
-          <div class="pg-cell">
-            <div class="k">Gear</div>
-            <div class="v">-</div>
-          </div>
-          <div class="pg-cell">
-            <div class="k">GK M.</div>
-            <div class="v">-</div>
-          </div>
-          <div class="pg-cell">
-            <div class="k">Stop</div>
-            <div class="v">-</div>
-          </div>
-          <div class="pg-cell">
-            <div class="k">BkEvn</div>
-            <div class="v">-</div>
-          </div>
+          <div class="pg-cell"><div class="k">Gear</div><div class="v">-</div></div>
+          <div class="pg-cell"><div class="k">GK M.</div><div class="v">-</div></div>
+          <div class="pg-cell"><div class="k">GK C.</div><div class="v">-</div></div>
+          <div class="pg-cell"><div class="k">Stop</div><div class="v">-</div></div>
+          <div class="pg-cell"><div class="k">BkEvn</div><div class="v">-</div></div>
         </div>
       </div>
       <div class="pg-group weight-1">
         <div class="pg-title">Monte</div>
         <div class="pg-grid">
-          <div class="pg-cell">
-            <div class="k">Noise</div>
-            <div class="v">-</div>
-          </div>
-          <div class="pg-cell">
-            <div class="k">W Wrst</div>
-            <div class="v">-</div>
-          </div>
-          <div class="pg-cell">
-            <div class="k">W Neut</div>
-            <div class="v">-</div>
-          </div>
-          <div class="pg-cell">
-            <div class="k">W Best</div>
-            <div class="v">-</div>
-          </div>
+          <div class="pg-cell"><div class="k">M Noise</div><div class="v">-</div></div>
+          <div class="pg-cell"><div class="k">W Wrst</div><div class="v">-</div></div>
+          <div class="pg-cell"><div class="k">W Neut</div><div class="v">-</div></div>
+          <div class="pg-cell"><div class="k">W Best</div><div class="v">-</div></div>
         </div>
       </div>
       <div class="pg-group weight-1">
         <div class="pg-title">Council</div>
         <div class="pg-grid">
-          <div class="pg-cell">
-            <div class="k">W ATR</div>
-            <div class="v">-</div>
-          </div>
-          <div class="pg-cell">
-            <div class="k">W ADX</div>
-            <div class="v">-</div>
-          </div>
-          <div class="pg-cell">
-            <div class="k">W Vol</div>
-            <div class="v">-</div>
-          </div>
-          <div class="pg-cell">
-            <div class="k">W VWAP</div>
-            <div class="v">-</div>
-          </div>
+          <div class="pg-cell"><div class="k">W ATR</div><div class="v">-</div></div>
+          <div class="pg-cell"><div class="k">W ADX</div><div class="v">-</div></div>
+          <div class="pg-cell"><div class="k">W Vol</div><div class="v">-</div></div>
+          <div class="pg-cell"><div class="k">W VWAP</div><div class="v">-</div></div>
         </div>
       </div>
       <div class="pg-group weight-1">
         <div class="pg-title">Callosum</div>
         <div class="pg-grid">
-          <div class="pg-cell">
-            <div class="k">W Monte</div>
-            <div class="v">-</div>
-          </div>
-          <div class="pg-cell">
-            <div class="k">W Right</div>
-            <div class="v">-</div>
-          </div>
-          <div class="pg-cell">
-            <div class="k">W Weak</div>
-            <div class="v">-</div>
-          </div>
+          <div class="pg-cell"><div class="k">W Monte</div><div class="v">-</div></div>
+          <div class="pg-cell"><div class="k">W Right</div><div class="v">-</div></div>
         </div>
       </div>
-      <div class="pg-group weight-2">
+      <div class="pg-group weight-1">
+        <div class="pg-title">Brain Stem</div>
+        <div class="pg-grid">
+          <div class="pg-cell"><div class="k">W Turt</div><div class="v">-</div></div>
+          <div class="pg-cell"><div class="k">W Coun</div><div class="v">-</div></div>
+          <div class="pg-cell"><div class="k">Sigma</div><div class="v">-</div></div>
+          <div class="pg-cell"><div class="k">Bias</div><div class="v">-</div></div>
+          <div class="pg-cell"><div class="k">EntryZ</div><div class="v">-</div></div>
+          <div class="pg-cell"><div class="k">DevCan</div><div class="v">-</div></div>
+          <div class="pg-cell"><div class="k">StaleBp</div><div class="v">-</div></div>
+          <div class="pg-cell"><div class="k">RevTgt</div><div class="v">-</div></div>
+        </div>
+      </div>
+      <div class="pg-group weight-1">
         <div class="pg-title">Execution</div>
         <div class="pg-grid">
-          <div class="pg-cell">
-            <div class="k">F Mak</div>
-            <div class="v">-</div>
-          </div>
-          <div class="pg-cell">
-            <div class="k">F Tak</div>
-            <div class="v">-</div>
-          </div>
-          <div class="pg-cell">
-            <div class="k">S Max</div>
-            <div class="v">-</div>
-          </div>
-          <div class="pg-cell">
-            <div class="k">Risk%</div>
-            <div class="v">-</div>
-          </div>
-          <div class="pg-cell">
-            <div class="k">Eqty</div>
-            <div class="v">-</div>
-          </div>
+          <div class="pg-cell"><div class="k">F Mak</div><div class="v">-</div></div>
+          <div class="pg-cell"><div class="k">F Tak</div><div class="v">-</div></div>
+          <div class="pg-cell"><div class="k">S Max</div><div class="v">-</div></div>
+          <div class="pg-cell"><div class="k">Risk%</div><div class="v">-</div></div>
+          <div class="pg-cell"><div class="k">Eqty</div><div class="v">-</div></div>
         </div>
       </div>
     </div>
@@ -387,6 +342,7 @@
     let timeSincePulse = 0;
     let engineActive = false;
     let stopBeaconSent = false;
+    let lastGoldId = null;
 
     // ── Chart State ──
     let chart = null;
@@ -505,8 +461,15 @@
 
     // ── Live Pulse Rendering ──
     function applyPulse(d) {
+      const pulseType = String(d.pulse_type || 'WAITING');
+      triggerPulse(pulseType);
+
+      // Piece 21: Auto-refresh Strategy parameters on ACTION pulse
+      if (pulseType === 'ACTION') {
+        loadGoldenParams();
+      }
+
       const council = n(d.council_score), monte = n(d.monte_score), tier = n(d.tier_score);
-      triggerPulse(String(d.pulse_type || 'WAITING'));
       // Pulse
       txt('bfCurrentPulse', String(d.pulse_type || '-'));
       txt('bfTotal', (council + monte + tier).toFixed(3));
@@ -614,12 +577,19 @@
         const res = await fetch(`${API_BASE}/api/treasury/status`, { headers: authHeaders() });
         if (!res.ok) return;
         const d = await res.json();
-        txt('dryOrders', String(d.orders || 0));
-        txt('dryFills', String(d.fills || 0));
-        txt('dryPositions', String(d.positions || 0));
-        txt('dryNetPnl', '$' + n(d.net_pnl).toFixed(2));
-        txt('dryDrawdown', '$' + n(d.drawdown).toFixed(2));
-        txt('dryWinRate', n(d.win_rate).toFixed(1) + '%');
+        const orderCount = Number(d.order_count ?? d.orders ?? 0);
+        const fillCount = Number(d.fill_count ?? d.fills ?? 0);
+        const openPositions = Number(d.open_positions ?? d.positions ?? 0);
+        const realizedPnl = Number(d.realized_pnl ?? d.net_pnl ?? 0);
+        const unrealizedPnl = Number(d.unrealized_pnl ?? 0);
+        const dailyLoss = Number(d.daily_loss ?? 0);
+
+        txt('dryOrders', String(orderCount));
+        txt('dryFills', String(fillCount));
+        txt('dryPositions', String(openPositions));
+        txt('dryNetPnl', '$' + n(realizedPnl).toFixed(2));
+        txt('dryDrawdown', '$' + n(unrealizedPnl).toFixed(2));
+        txt('dryWinRate', '$' + Math.abs(n(dailyLoss)).toFixed(2));
       } catch (e) { /* silent */ }
     }
 
@@ -640,30 +610,68 @@
         const res = await fetch(`${API_BASE}/api/vault/gold`, { headers: authHeaders() });
         if (!res.ok) return;
         const d = await res.json();
+        
+        // Piece 21: Only update DOM if the Gold ID has actually changed
+        if (lastGoldId && d.id === lastGoldId) return;
+        lastGoldId = d.id;
+
         const p = d.params || {};
         const strip = id('goldenParamsStrip');
         if (!strip) return;
+        
+        // Full 23-D Strategy Vector Mapping
         const map = {
-          'Gear': p.active_gear, 'GK M.': p.gatekeeper_min_monte,
-          'Stop': p.stop_loss_mult, 'BkEvn': p.breakeven_mult,
-          'Noise': p.monte_noise_scalar, 'W Wrst': p.monte_w_worst,
-          'W Neut': p.monte_w_neutral, 'W Best': p.monte_w_best,
-          'W ATR': p.council_w_atr, 'W ADX': p.council_w_adx,
-          'W Vol': p.council_w_vol, 'W VWAP': p.council_w_vwap,
-          'W Monte': p.callosum_w_monte, 'W Right': p.callosum_w_right,
-          'W Weak': p.callosum_w_weak,
-          'F Mak': p.fee_maker_bps, 'F Tak': p.fee_taker_bps,
-          'S Max': p.max_slippage_bps, 'Risk%': p.risk_per_trade_pct,
+          // Strategy
+          'Gear': p.active_gear,
+          'GK M.': p.gatekeeper_min_monte,
+          'GK C.': p.gatekeeper_min_council,
+          'Stop': p.stop_loss_mult,
+          'BkEvn': p.breakeven_mult,
+          // Monte
+          'M Noise': p.monte_noise_scalar,
+          'W Wrst': p.monte_w_worst,
+          'W Neut': p.monte_w_neutral,
+          'W Best': p.monte_w_best,
+          // Council
+          'W ATR': p.council_w_atr,
+          'W ADX': p.council_w_adx,
+          'W Vol': p.council_w_vol,
+          'W VWAP': p.council_w_vwap,
+          // Callosum
+          'W Monte': p.callosum_w_monte,
+          'W Right': p.callosum_w_right,
+          // Brain Stem
+          'W Turt': p.brain_stem_w_turtle,
+          'W Coun': p.brain_stem_w_council,
+          'Sigma': p.brain_stem_sigma,
+          'Bias': p.brain_stem_bias,
+          'EntryZ': p.brain_stem_entry_max_z,
+          'DevCan': p.brain_stem_mean_dev_cancel_sigma,
+          'StaleBp': p.brain_stem_stale_price_cancel_bps,
+          'RevTgt': p.brain_stem_mean_rev_target_sigma,
+          // Execution (Fallback from vault or env)
+          'F Mak': p.fee_maker_bps,
+          'F Tak': p.fee_taker_bps,
+          'S Max': p.max_slippage_bps,
+          'Risk%': p.risk_per_trade_pct,
           'Eqty': p.equity,
         };
+
         strip.querySelectorAll('.pg-cell').forEach(cell => {
           const label = cell.querySelector('.k');
           const val = cell.querySelector('.v');
           if (label && val && map[label.textContent] !== undefined) {
             const v = map[label.textContent];
-            val.textContent = typeof v === 'number' ? (Number.isInteger(v) ? v : v.toFixed(2)) : v;
+            if (v === null || v === undefined) {
+              val.textContent = '-';
+            } else {
+              val.textContent = typeof v === 'number' ? (Number.isInteger(v) ? v : v.toFixed(2)) : v;
+            }
           }
         });
+        if (lastGoldId !== 'UNKNOWN') {
+           addLog(`STRATEGY REFRESH | ID: ${lastGoldId.substring(0,8)}`);
+        }
       } catch (e) { addLog('Gold params load failed', 'error'); }
     }
 

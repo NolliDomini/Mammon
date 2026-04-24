@@ -1,0 +1,24 @@
+moved_at=2026-04-23T14:36:33.6616970-04:00
+Thalamus\relay\service-TheBrain.py	_migration\thebrain_services\Thalamus\relay\service-TheBrain.py
+Thalamus\gland\service-TheBrain.py	_migration\thebrain_services\Thalamus\gland\service-TheBrain.py
+Left_Hemisphere\Monte_Carlo\walk\service-TheBrain.py	_migration\thebrain_services\Left_Hemisphere\Monte_Carlo\walk\service-TheBrain.py
+Hospital\Optimizer_loop\volume_furnace_orchestrator\service-TheBrain.py	_migration\thebrain_services\Hospital\Optimizer_loop\volume_furnace_orchestrator\service-TheBrain.py
+Pituitary\refinery\service-TheBrain.py	_migration\thebrain_services\Pituitary\refinery\service-TheBrain.py
+Right_Hemisphere\Snapping_Turtle\engine\service-TheBrain.py	_migration\thebrain_services\Right_Hemisphere\Snapping_Turtle\engine\service-TheBrain.py
+Brain_Stem\trigger\service-TheBrain.py	_migration\thebrain_services\Brain_Stem\trigger\service-TheBrain.py
+Left_Hemisphere\Monte_Carlo\turtle\service-TheBrain.py	_migration\thebrain_services\Left_Hemisphere\Monte_Carlo\turtle\service-TheBrain.py
+Corpus\callosum\service-TheBrain.py	_migration\thebrain_services\Corpus\callosum\service-TheBrain.py
+Pituitary\gland\service-TheBrain.py	_migration\thebrain_services\Pituitary\gland\service-TheBrain.py
+Hippocampus\fornix\service-TheBrain.py	_migration\thebrain_services\Hippocampus\fornix\service-TheBrain.py
+Hippocampus\schema_guard\service-TheBrain.py	_migration\thebrain_services\Hippocampus\schema_guard\service-TheBrain.py
+Hippocampus\amygdala\service-TheBrain.py	_migration\thebrain_services\Hippocampus\amygdala\service-TheBrain.py
+Hippocampus\duck_pond\service-TheBrain.py	_migration\thebrain_services\Hippocampus\duck_pond\service-TheBrain.py
+Hospital\Optimizer_loop\optimizer_v2\service-TheBrain.py	_migration\thebrain_services\Hospital\Optimizer_loop\optimizer_v2\service-TheBrain.py
+Hippocampus\pineal\service-TheBrain.py	_migration\thebrain_services\Hippocampus\pineal\service-TheBrain.py
+Hospital\Optimizer_loop\guardrailed_optimizer\service-TheBrain.py	_migration\thebrain_services\Hospital\Optimizer_loop\guardrailed_optimizer\service-TheBrain.py
+Hippocampus\telepathy\service-TheBrain.py	_migration\thebrain_services\Hippocampus\telepathy\service-TheBrain.py
+Cerebellum\Soul\orchestrator\service-TheBrain.py	_migration\thebrain_services\Cerebellum\Soul\orchestrator\service-TheBrain.py
+Medulla\orders\service-TheBrain.py	_migration\thebrain_services\Medulla\orders\service-TheBrain.py
+Cerebellum\Soul\brain_frame\service-TheBrain.py	_migration\thebrain_services\Cerebellum\Soul\brain_frame\service-TheBrain.py
+Medulla\gatekeeper\service-TheBrain.py	_migration\thebrain_services\Medulla\gatekeeper\service-TheBrain.py
+Hospital\Optimizer_loop\bounds\service-TheBrain.py	_migration\thebrain_services\Hospital\Optimizer_loop\bounds\service-TheBrain.py

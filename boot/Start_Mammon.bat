@@ -116,6 +116,14 @@ if %errorlevel% neq 0 (
     exit /b 1
 )
 
+echo [*] Running schema handshake...
+docker compose -f "!ROOT_DIR!\docker-compose.yml" exec -T dashboard python /mammon/boot.py
+if %errorlevel% neq 0 (
+    echo [!] Schema handshake failed. Check logs.
+    pause
+    exit /b 1
+)
+
 :: 7. Wait for Engine to be Ready (with Timeout)
 echo [*] Waiting for Mammon Dashboard to wake up...
 where curl >nul 2>&1

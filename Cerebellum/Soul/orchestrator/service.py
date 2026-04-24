@@ -47,7 +47,7 @@ class Orchestrator:
         self.pulse_seq = 0
         
         # V3.1 BRAINTICK: Clean ward on boot
-        WardManager().janitor_sweep()
+        WardManager(run_id=self.run_id).janitor_sweep()
         
         # Hot-table source of truth with file mirror fallback.
         self.vault_path = Path(__file__).resolve().parents[3] / "Hippocampus" / "hormonal_vault.json"
@@ -63,13 +63,15 @@ class Orchestrator:
         print(f"[SOUL] {self.run_id} Hormonal Vault Mirror: {self.vault_path}")
         print(f"[SOUL] {self.run_id} Gold Mirror Active (ID: {self.vault.get('gold', {}).get('id', 'UNK')})")
         print(f"[SOUL] {self.run_id} Mode Canvas: {self.frame.market.execution_mode}")
-        
+
         # Supporting Engines
+        self.pituitary = PituitaryGland()
         self.walk_engine = QuantizedGeometricWalk()
         # Live orchestrator must not run simulation ignition cadence.
         self.furnace = VolumeFurnaceOrchestrator(
             simulation_mode=False,
             execution_mode=str(self.config.get("execution_mode", "DRY_RUN")).upper(),
+            pituitary=self.pituitary,
         )
         amygdala_config = {
             "synapse_persist_pulse_types": self.config.get("synapse_persist_pulse_types", ["MINT"]),
@@ -83,7 +85,6 @@ class Orchestrator:
                 "synapse_preserve_pulse_types": amygdala_config.get("synapse_persist_pulse_types", ["MINT"])
             }
         )
-        self.pituitary = PituitaryGland()
         self.crawler = None
         if ParamCrawler is not None:
             try:

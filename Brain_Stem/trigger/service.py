@@ -267,58 +267,75 @@ class Trigger:
                     return True
 
                 prior = self._get_prior(frame)
+                # Mean reversion kill-switch between ACTION arming and MINT firing.
+                mean_ref = self.pending_entry.get("mean_at_entry", price)
+                sigma_ref = max(self.pending_entry.get("sigma_at_entry", 1e-9), 1e-9)
+                z_score = (frame.structure.price - mean_ref) / sigma_ref
+                cancel_sigma = float(self.config.get("brain_stem_mean_dev_cancel_sigma", 0.0))
 
-                # Execute fire logic
-                val_data = self._run_valuation_gate(frame, prior, walk_seed)
-                print(
-                    f"   [BRAIN STEM] MINT FIRE {symbol} @ {price:.4f}"
-                )
-                fire_result = self._fire_physical(symbol, "BUY", qty, price)
-                if not isinstance(fire_result, dict):
-                    fire_result = {"status": "fired", "source": "compat"}
-                if fire_result.get("status") != "fired":
-                    self.last_exit_reason = f"REJECT_ADAPTER_FAILURE ({fire_result.get('msg', 'unknown')})"
+                if cancel_sigma > 0.0 and z_score >= cancel_sigma:
+                    self.last_exit_reason = f"MEAN_DEV_CANCEL (z={z_score:.2f} >= {cancel_sigma:.2f})"
                     if self.treasury and intent_id:
-                        self.treasury.reject_intent(intent_id, symbol, self.last_exit_reason)
+                        self.treasury.cancel_intent(intent_id, symbol, self.last_exit_reason)
                     self._emit_exec_event(
                         pulse,
-                        "REJECT",
+                        "CANCEL",
                         self.last_exit_reason,
                         symbol=symbol,
                         intent_id=intent_id,
-                        adapter=self.execution_adapter,
                     )
                 else:
-                    if self.treasury and intent_id:
-                        self.treasury.fire_intent(
-                            intent_id,
-                            symbol,
-                            "BUY",
-                            qty,
-                            price,
-                            sigma=float(val_data.get("sigma", 0.0)),
-                            price_ref=float(self.pending_entry.get("armed_price", price)),
-                        )
-                    self.position = {
-                        "side": "LONG",
-                        "entry_price": price,
-                        "entry_ts": time.time(),
-                        "qty": qty,
-                        "bands": self.pending_entry.get("bands", {}),
-                        "symbol": symbol,
-                        "entry_z": self.pending_entry.get("entry_z", 0.0),
-                        "mean_at_entry": self.pending_entry.get("mean_at_entry", price),
-                        "sigma_at_entry": self.pending_entry.get("sigma_at_entry", 1e-9),
-                    }
-                    self._emit_exec_event(
-                        pulse,
-                        "FIRE",
-                        "MINT_FIRED",
-                        symbol=symbol,
-                        intent_id=intent_id,
-                        qty=qty,
-                        price=price,
+                    # Execute fire logic
+                    val_data = self._run_valuation_gate(frame, prior, walk_seed)
+                    print(
+                        f"   [BRAIN STEM] MINT FIRE {symbol} @ {price:.4f}"
                     )
+                    fire_result = self._fire_physical(symbol, "BUY", qty, price)
+                    if not isinstance(fire_result, dict):
+                        fire_result = {"status": "fired", "source": "compat"}
+                    if fire_result.get("status") != "fired":
+                        self.last_exit_reason = f"REJECT_ADAPTER_FAILURE ({fire_result.get('msg', 'unknown')})"
+                        if self.treasury and intent_id:
+                            self.treasury.reject_intent(intent_id, symbol, self.last_exit_reason)
+                        self._emit_exec_event(
+                            pulse,
+                            "REJECT",
+                            self.last_exit_reason,
+                            symbol=symbol,
+                            intent_id=intent_id,
+                            adapter=self.execution_adapter,
+                        )
+                    else:
+                        if self.treasury and intent_id:
+                            self.treasury.fire_intent(
+                                intent_id,
+                                symbol,
+                                "BUY",
+                                qty,
+                                price,
+                                sigma=float(val_data.get("sigma", 0.0)),
+                                price_ref=float(self.pending_entry.get("armed_price", price)),
+                            )
+                        self.position = {
+                            "side": "LONG",
+                            "entry_price": price,
+                            "entry_ts": time.time(),
+                            "qty": qty,
+                            "bands": self.pending_entry.get("bands", {}),
+                            "symbol": symbol,
+                            "entry_z": self.pending_entry.get("entry_z", 0.0),
+                            "mean_at_entry": self.pending_entry.get("mean_at_entry", price),
+                            "sigma_at_entry": self.pending_entry.get("sigma_at_entry", 1e-9),
+                        }
+                        self._emit_exec_event(
+                            pulse,
+                            "FIRE",
+                            "MINT_FIRED",
+                            symbol=symbol,
+                            intent_id=intent_id,
+                            qty=qty,
+                            price=price,
+                        )
             self.pending_entry = None
             self.mean_dev_monitor_active = False
             self.prev_price = frame.structure.price

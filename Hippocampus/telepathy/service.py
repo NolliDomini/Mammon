@@ -4,7 +4,6 @@ import time
 from pathlib import Path
 from typing import Tuple, List, Any
 import sqlite3
-from Hippocampus.Archivist.librarian import Librarian
 
 class Telepathy:
     """
@@ -52,8 +51,13 @@ class Telepathy:
         self.scribe_thread.start()
         print("[TELEPATHY] Scribe Daemon ignited (V4 Hardened). Routing to: MEMORY, SYNAPSE.")
 
-    def transmit(self, sql: str, params: Any):
+    def transmit(self, sql: str, params: Any, transport: str = "sqlite"):
         """Fire-and-forget logging. Returns instantly."""
+        transport_l = str(transport or "sqlite").lower()
+        if transport_l == "timescale":
+            # Timescale writes must execute through psycopg2 directly.
+            raise ValueError("TELEPATHY_UNSUPPORTED_TRANSPORT: timescale")
+
         qsize = self.queue.qsize()
         if qsize > self.high_watermark:
             self.high_watermark = qsize
@@ -71,7 +75,7 @@ class Telepathy:
             except queue.Empty:
                 pass
 
-        self.queue.put((sql, params))
+        self.queue.put((sql, params, transport_l))
 
     def _scribe_loop(self):
         """Background loop to drain the queue and commit to disk."""
@@ -85,18 +89,35 @@ class Telepathy:
                     # Wait for first item
                     timeout = self.flush_interval if self.running else 0.01
                     item = self.queue.get(timeout=timeout)
-                    sql, params = item
+                    if len(item) == 3:
+                        sql, params, transport = item
+                    else:
+                        sql, params = item
+                        transport = "sqlite"
                     # Route to synapse if specifically requested, else memory
-                    target = "SYNAPSE" if "synapse_mint" in sql.lower() or "history_synapse" in sql.lower() else "MEMORY"
-                    vault_batches[target].append((sql, params))
+                    target = "SYNAPSE" if (
+                        str(transport).lower() == "synapse"
+                        or "synapse_mint" in sql.lower()
+                        or "history_synapse" in sql.lower()
+                    ) else "MEMORY"
+                    vault_batches[target].append((sql, params, transport))
                     count += 1
                     
                     # Drain remainder up to batch size
                     while count < self.batch_size:
                         try:
-                            sql, params = self.queue.get_nowait()
-                            target = "SYNAPSE" if "synapse_mint" in sql.lower() or "history_synapse" in sql.lower() else "MEMORY"
-                            vault_batches[target].append((sql, params))
+                            item = self.queue.get_nowait()
+                            if len(item) == 3:
+                                sql, params, transport = item
+                            else:
+                                sql, params = item
+                                transport = "sqlite"
+                            target = "SYNAPSE" if (
+                                str(transport).lower() == "synapse"
+                                or "synapse_mint" in sql.lower()
+                                or "history_synapse" in sql.lower()
+                            ) else "MEMORY"
+                            vault_batches[target].append((sql, params, transport))
                             count += 1
                         except queue.Empty:
                             break
@@ -127,7 +148,7 @@ class Telepathy:
                 time.sleep(1)
         print(f"[TELEPATHY] Scribe Daemon extinguished. Total committed: {self.total_committed}, Dropped: {self.dropped_items}, Retries: {self.retry_count}")
 
-    def _commit_batch_with_retry(self, db_path: Path, batch: List[Tuple[str, Any]], max_retries: int = 5) -> bool:
+    def _commit_batch_with_retry(self, db_path: Path, batch: List[Tuple[str, Any, str]], max_retries: int = 5) -> bool:
         """Commits a batch with bounded exponential backoff for lock contention."""
         for attempt in range(max_retries):
             try:
@@ -152,9 +173,12 @@ class Telepathy:
         print(f"[TELEPATHY_FATAL] Exhausted retries for vault={db_path.name}. Dropping batch of {len(batch)}.")
         return False
 
-    def _commit_batch(self, db_path: Path, batch: List[Tuple[str, Any]]):
+    def _commit_batch(self, db_path: Path, batch: List[Tuple[str, Any, str]]):
         """Low-level batch commit via Librarian factory."""
-        with Librarian.get_connection(db_path) as conn:
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+        with sqlite3.connect(str(db_path), timeout=30.0) as conn:
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA busy_timeout=5000")
             cursor = conn.cursor()
             # Explicit transaction management
             conn.execute("BEGIN IMMEDIATE") 
@@ -168,9 +192,11 @@ class Telepathy:
                     return 0.0
                 return v
 
-            for sql, params in batch:
+            for sql, params, _transport in batch:
                 if isinstance(params, dict):
                     safe_params = {k: _serialize(v) for k, v in params.items()}
+                elif params is None:
+                    safe_params = ()
                 else:
                     safe_params = tuple(_serialize(x) for x in params)
                 cursor.execute(sql, safe_params)

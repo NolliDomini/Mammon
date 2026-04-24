@@ -9,6 +9,9 @@ __pycache__/
 
 # Local Runtime Data
 runtime/
+runtime/.tmp_test_local/*.duckdb
+runtime/.tmp_test_local/*.duckdb.wal
+runtime/.tmp_test_local/v2_*.db
 logs/
 Archive/
 ui_work/

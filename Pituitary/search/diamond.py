@@ -45,9 +45,10 @@ class DiamondGland:
             "active_gear", "monte_noise_scalar", "monte_w_worst", "monte_w_neutral", "monte_w_best",
             "council_w_atr", "council_w_adx", "council_w_vol", "council_w_vwap",
             "gatekeeper_min_monte", "gatekeeper_min_council",
-            "callosum_w_monte", "callosum_w_right", "callosum_w_adx", "callosum_w_weak",
-            "brain_stem_w_turtle", "brain_stem_w_council", "brain_stem_survival",
-            "brain_stem_noise", "brain_stem_sigma", "brain_stem_bias",
+            "callosum_w_monte", "callosum_w_right",
+            "brain_stem_w_turtle", "brain_stem_w_council", "brain_stem_sigma", "brain_stem_bias",
+            "brain_stem_entry_max_z", "brain_stem_mean_dev_cancel_sigma",
+            "brain_stem_stale_price_cancel_bps", "brain_stem_mean_rev_target_sigma",
             "stop_loss_mult", "breakeven_mult"
         ]
         

@@ -729,6 +729,41 @@ class DuckPond:
         print(f"[DUCK_POND] Archived {count:,} history synapse rows under run_id={run_id}.")
         return count
 
+    def archive_and_clear_history_synapse(self, run_id: str = "unknown") -> int:
+        """
+        Transactionally archive staged history_synapse rows and then wipe staging.
+        """
+        count = self.get_synapse_count()
+        if count <= 0:
+            return 0
+
+        try:
+            self.conn.execute("BEGIN TRANSACTION")
+            self.conn.execute("""
+                INSERT INTO brainframe_mint_archive (
+                    run_id, archived_at, ts, symbol, pulse_type, open, high, low, close, volume,
+                    price, active_hi, active_lo, gear, tier1_signal, monte_score, tier_score, regime_id,
+                    worst_survival, neutral_survival, best_survival, council_score, atr, atr_avg, adx,
+                    volume_score, decision, approved, final_confidence, sizing_mult, ready_to_fire,
+                    gold_id, platinum_id
+                )
+                SELECT
+                    ?, current_timestamp, ts, symbol, pulse_type, open, high, low, close, volume,
+                    price, active_hi, active_lo, gear, tier1_signal, monte_score, tier_score, regime_id,
+                    worst_survival, neutral_survival, best_survival, council_score, atr, atr_avg, adx,
+                    volume_score, decision, approved, final_confidence, sizing_mult, ready_to_fire,
+                    gold_id, platinum_id
+                FROM history_synapse
+            """, [run_id])
+            self.conn.execute("DELETE FROM history_synapse")
+            self.conn.execute("DELETE FROM fornix_checkpoint")
+            self.conn.execute("COMMIT")
+            print(f"[DUCK_POND] Archived and wiped {count:,} history synapse rows (run_id={run_id}).")
+            return count
+        except Exception:
+            self.conn.execute("ROLLBACK")
+            raise
+
     def get_stats(self) -> dict:
         """Returns all table row counts for the dashboard."""
         return {
