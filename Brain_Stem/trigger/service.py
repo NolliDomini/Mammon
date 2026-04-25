@@ -419,10 +419,11 @@ class Trigger:
         # Piece 21 Bridge: Write results back to BrainFrame for UI/DB visibility
         frame.risk.monte_score = float(risk)
         frame.valuation.mean = float(val_data["mean"])
-        frame.valuation.sigma = float(val_data["sigma"])
+        frame.valuation.std_dev = float(val_data["sigma"])
         frame.valuation.upper_band = float(val_data["upper"])
         frame.valuation.lower_band = float(val_data["lower"])
-        frame.valuation.z_distance = float((price - val_data["mean"]) / max(val_data["sigma"], 1e-9))
+        frame.valuation.z_distance = float((val_data["mean"] - price) / max(val_data["sigma"], 1e-9))
+        frame.valuation.valuation_source = "TRIGGER_GATE"
         
         # ---- LOGIC ----
         if self.position is None:

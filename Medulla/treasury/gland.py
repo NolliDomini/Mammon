@@ -1,18 +1,9 @@
 import time
 import json
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Dict, Any
 
 from Hippocampus.Archivist.librarian import Librarian
-
-_DEFAULT_MONEY_DB = (
-    Path(__file__).resolve().parents[2]
-    / "Hippocampus"
-    / "Archivist"
-    / "Ecosystem_Memory.db"
-)
-
 
 class TreasuryGland:
     """
@@ -23,7 +14,7 @@ class TreasuryGland:
     def __init__(self, mode: str = "DRY_RUN", config: Dict[str, Any] = None, librarian: Librarian = None):
         self.mode = (mode or "DRY_RUN").upper()
         self.config = config or {}
-        self.librarian = librarian or Librarian(db_path=_DEFAULT_MONEY_DB)
+        self.librarian = librarian or Librarian()
         self._init_schema()
 
     def _init_schema(self):

@@ -123,7 +123,7 @@ class Callosum:
         w_right: float,
     ) -> None:
         try:
-            self.librarian.dispatch("""
+            self.librarian.write("""
                 INSERT INTO callosum_mint(
                     mode, tier_id, signal_type, monte_score, tier_score,
                     signal_strength, adx_val, weakness_val,

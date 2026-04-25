@@ -1,4 +1,3 @@
-import concurrent.futures
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -220,30 +219,6 @@ class Council:
             "volume_score": float(self._last_results.get("vol", {}).get("score", 0.5)),
             "telemetry": self.telemetry
         }
-
-    def calculate_cortex_cache(self):
-        """
-        Piece 12: Centralized Indicator Authority.
-        Populates the high-speed DuckDB precalc cache directly from the raw tape.
-        """
-        conn = self.librarian.get_duck_connection()
-        conn.execute("DELETE FROM cortex_precalc")
-        query = """
-        INSERT INTO cortex_precalc
-        WITH tr_calc AS (
-            SELECT ts, symbol, close, high, low,
-                GREATEST(high - low, ABS(high - LAG(close) OVER (PARTITION BY symbol ORDER BY ts)), ABS(low - LAG(close) OVER (PARTITION BY symbol ORDER BY ts))) as tr
-            FROM market_tape
-        )
-        SELECT ts, symbol, close,
-            avg(tr) OVER (PARTITION BY symbol ORDER BY ts ROWS BETWEEN 13 PRECEDING AND CURRENT ROW) as atr_14,
-            avg(close) OVER (PARTITION BY symbol ORDER BY ts ROWS BETWEEN 99 PRECEDING AND CURRENT ROW) as mean_100,
-            avg(close) OVER (PARTITION BY symbol ORDER BY ts ROWS BETWEEN 99 PRECEDING AND CURRENT ROW) + (2.0 * stddev(close) OVER (PARTITION BY symbol ORDER BY ts ROWS BETWEEN 99 PRECEDING AND CURRENT ROW)) as upper_band,
-            avg(close) OVER (PARTITION BY symbol ORDER BY ts ROWS BETWEEN 99 PRECEDING AND CURRENT ROW) - (1.5 * stddev(close) OVER (PARTITION BY symbol ORDER BY ts ROWS BETWEEN 99 PRECEDING AND CURRENT ROW)) as lower_band,
-            CASE WHEN (high - low) > (avg(high - low) OVER (PARTITION BY symbol ORDER BY ts ROWS BETWEEN 99 PRECEDING AND CURRENT ROW) * 2.0) THEN 'HighVol' ELSE 'Normal' END as regime_tag
-        FROM tr_calc
-        """
-        conn.execute(query)
 
     def _calculate_atr_score(self, df: pd.DataFrame):
         # Piece 10: Use standardized Numba kernel

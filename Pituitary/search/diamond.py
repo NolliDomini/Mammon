@@ -1,8 +1,6 @@
 import sys
 import numpy as np
-import json
 import time
-import sqlite3
 from pathlib import Path
 from typing import Dict, Any
 from sklearn.gaussian_process import GaussianProcessRegressor
@@ -15,7 +13,7 @@ if str(project_root) not in sys.path:
 
 from Pituitary.refinery.service import SynapseRefinery
 from Hippocampus.Archivist.diamond_scribe import DiamondScribe
-from Hippocampus.Archivist.librarian import Librarian
+from Hippocampus.Archivist.librarian import Librarian, librarian
 from Hospital.Optimizer_loop.bounds import MINS, MAXS, normalize_weights
 
 class DiamondGland:
@@ -24,9 +22,9 @@ class DiamondGland:
     V3.1 HORMONAL: Discharges from the private Diamond Silo.
     """
     def __init__(self):
-        self.vault_path = project_root / "Hippocampus" / "hormonal_vault.json"
         self.refinery = SynapseRefinery()
         self.scribe = DiamondScribe()
+        self.librarian = librarian
 
     def perform_deep_search(self):
         print("\n=== [DIAMOND] STARTING DEEP BAYESIAN SEARCH (500 ITERATIONS) ===")
@@ -94,15 +92,15 @@ class DiamondGland:
         print("=== [DIAMOND] DEEP SEARCH COMPLETE. RAILS MINTED. ===\n")
 
     def _update_vault(self, rails: Dict[str, Any]):
-        with open(self.vault_path, "r") as f:
-            vault = json.load(f)
-            
+        vault = self.librarian.get_hormonal_vault()
+        if not isinstance(vault.get("diamond_rails"), dict):
+            vault["diamond_rails"] = {}
+        if not isinstance(vault.get("meta"), dict):
+            vault["meta"] = {}
         vault["diamond_rails"]["bounds"] = rails
         vault["diamond_rails"]["last_search_ts"] = time.strftime("%Y-%m-%dT%H:%M:%S")
         vault["meta"]["last_metabolism_ts"] = vault["diamond_rails"]["last_search_ts"]
-        
-        with open(self.vault_path, "w") as f:
-            json.dump(vault, f, indent=2)
+        self.librarian.set_hormonal_vault(vault)
 
 if __name__ == "__main__":
     DiamondGland().perform_deep_search()

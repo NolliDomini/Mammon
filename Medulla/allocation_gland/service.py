@@ -149,6 +149,7 @@ class AllocationGland:
 
             # Piece 102 & 105: Write to BrainFrame
             frame.command.qty = float(qty)
+            frame.command.sizing_mult = float(qty)  # Brain Stem reads sizing_mult, not qty
             frame.command.notional = float(qty * price)
             frame.command.size_reason = str(size_reason)
             # Piece 105: Calculate risk_used

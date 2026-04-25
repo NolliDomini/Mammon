@@ -1,5 +1,4 @@
 import json
-import sqlite3
 import time
 import numpy as np
 from pathlib import Path
@@ -60,9 +59,6 @@ class PituitaryGland:
         self.bronze_path = self.params_root / "bronze_list.json"
         self.vault_path = self.root.parent / "Hippocampus" / "hormonal_vault.json"
         self.librarian = librarian
-
-        # Database connection for Silver mining
-        self.synapse_db = self.root.parent / "Hippocampus" / "Archivist" / "Ecosystem_Synapse.db"
 
         # V3.2 GROWTH HORMONE: MINT cadence tracking
         self.mint_count = 0
@@ -360,7 +356,6 @@ class PituitaryGland:
                 "minted_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
                 "origin": "VolumeFurnace"
             }
-            vault = self.librarian.get_hormonal_vault()
             vault["platinum"] = new_entry
             self.librarian.set_hormonal_vault(vault)
             try:
@@ -396,25 +391,6 @@ class PituitaryGland:
                 return best["params"]
 
         return {}  # Fallback to defaults
-
-    def _mine_silver(self) -> Optional[Dict[str, Any]]:
-        """Queries Synapse DB for the highest conviction winning ticket."""
-        if not self.synapse_db.exists(): return None
-        
-        try:
-            with sqlite3.connect(str(self.synapse_db)) as conn:
-                conn.row_factory = sqlite3.Row
-                cursor = conn.execute("""
-                    SELECT * FROM synapse_mint 
-                    WHERE pulse_type = 'MINT' AND final_confidence > 0.8 
-                    ORDER BY ts DESC LIMIT 1
-                """)
-                row = cursor.fetchone()
-                if row:
-                    return dict(row) 
-        except Exception as e:
-            print(f"[PITUITARY_ERROR] Silver mining failed: {e}")
-        return None
 
     def _retire_to_bronze(self, entry: Dict[str, Any], reason: str):
         """Moves an entry to the bronze lineage in the hot-table vault."""

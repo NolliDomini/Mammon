@@ -1,5 +1,4 @@
 import pandas as pd
-import numpy as np
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional
@@ -10,8 +9,6 @@ from alpaca.data.historical import (
 from alpaca.data.requests import (
     StockBarsRequest, 
     CryptoBarsRequest,
-    StockQuotesRequest,
-    StockTradesRequest,
     StockSnapshotRequest,
     CryptoSnapshotRequest,
     StockLatestBarRequest,

@@ -256,8 +256,24 @@ class Orchestrator:
                     self._run_lobe("Corpus", self.lobes["Corpus"].score_tier, metrics, pulse_type, frame=self.frame)
                     self._run_lobe("Gatekeeper", self.lobes["Gatekeeper"].decide, metrics, pulse_type, frame=self.frame)
 
-                    # Piece 94: Allocate Quantity - Must run after Gatekeeper (decision) but before Trigger (firing)
-                    if "AllocationGland" in self.lobes:
+                    # Piece 94: Allocate Quantity.
+                    # Two prior bugs: (1) ran even when Gatekeeper rejected; (2) read z_distance
+                    # from frame.valuation before Brain Stem had written it, so always saw 0.0
+                    # and killed approved trades with NO_TRADE_ABOVE_MEAN.
+                    # Fix: gate behind ready_to_fire and pre-compute Brain Stem valuation first.
+                    if "AllocationGland" in self.lobes and self.frame.command.ready_to_fire:
+                        if "Brain_Stem" in self.lobes and hasattr(self.lobes["Brain_Stem"], "_run_valuation_gate"):
+                            _bs = self.lobes["Brain_Stem"]
+                            _prior = _bs._get_prior(self.frame)
+                            _val = _bs._run_valuation_gate(self.frame, _prior, walk_seed)
+                            _price = float(self.frame.structure.price or 0.0)
+                            self.frame.valuation.mean = float(_val["mean"])
+                            self.frame.valuation.std_dev = float(_val["sigma"])
+                            self.frame.valuation.upper_band = float(_val["upper"])
+                            self.frame.valuation.lower_band = float(_val["lower"])
+                            self.frame.valuation.z_distance = float(
+                                (_val["mean"] - _price) / max(float(_val["sigma"]), 1e-9)
+                            )
                         self._run_lobe("AllocationGland", self.lobes["AllocationGland"].allocate, metrics, pulse_type, frame=self.frame)
 
                     # Final inhibit if trade gate is locked
