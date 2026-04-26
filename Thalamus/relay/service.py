@@ -1,11 +1,13 @@
+import asyncio
 import pandas as pd
 import time
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 from alpaca.data.historical import (
-    StockHistoricalDataClient, 
+    StockHistoricalDataClient,
     CryptoHistoricalDataClient
 )
+from alpaca.data.live import CryptoDataStream, StockDataStream
 from alpaca.data.requests import (
     StockBarsRequest, 
     CryptoBarsRequest,
@@ -42,8 +44,12 @@ class Thalamus:
         self.stock_client = StockHistoricalDataClient(api_key, api_secret) if api_key else None
         self.crypto_client = CryptoHistoricalDataClient(api_key, api_secret) if api_key else CryptoHistoricalDataClient()
         
+        # Live streams
+        self.crypto_stream = CryptoDataStream(api_key, api_secret) if api_key else None
+        self.stock_stream = StockDataStream(api_key, api_secret) if api_key else None
+
         self.optical_tract = optical_tract
-        self.duck_pond = duck_pond 
+        self.duck_pond = duck_pond
         self.lib = Librarian()
         self.gland = SmartGland(window_minutes=5)
         self.last_ingestion_event: Dict[str, Any] = {}
@@ -228,6 +234,58 @@ class Thalamus:
         out.index.name = "ts"
         self._record_ingestion_event(source, out["symbol"].iloc[-1] if not out.empty else symbol_hint, len(out), "ok")
         return out
+
+    def warmup_context(self, symbols: list, is_crypto: bool = True) -> None:
+        """Pull 60 min of historical 1m bars to prime SmartGland before live stream starts."""
+        end = datetime.now(timezone.utc)
+        start = end - timedelta(minutes=60)
+        try:
+            df = self._pulse_from_alpaca(symbols, TimeFrame.Minute, start, end, is_crypto)
+            if not df.empty:
+                self.gland.ingest(df)
+                # Reset live-window state so the first real bar opens a clean window
+                # instead of triggering a spurious flush of the last warmup window.
+                self.gland.current_window_start = None
+                self.gland.raw_list = []
+                self.gland._reset_window_markers()
+                self.gland._live_mode = True
+                print(f"   [THALAMUS] Warmup: {len(self.gland.context_df)} context bars loaded.")
+            else:
+                print("   [THALAMUS_WARN] Warmup returned no data. Context remains cold.")
+        except Exception as e:
+            print(f"[THAL-E-P26-105] Warmup context failed: {e}")
+
+    async def connect_stream(self, symbols: list, is_crypto: bool = True, bar_callback=None) -> None:
+        """Subscribe to Alpaca live 1m bar stream. bar_callback(bar) called for each closed bar."""
+        stream = self.crypto_stream if is_crypto else self.stock_stream
+        if not stream:
+            raise RuntimeError("[THALAMUS] Stream client not initialized. Check credentials.")
+        handler = bar_callback if bar_callback is not None else self._on_bar
+        stream.subscribe_bars(handler, *symbols)
+        await stream._run_forever()
+
+    async def stop_stream(self, is_crypto: bool = True) -> None:
+        stream = self.crypto_stream if is_crypto else self.stock_stream
+        if stream:
+            await stream.stop()
+
+    async def _on_bar(self, bar) -> None:
+        try:
+            raw_dict = {
+                "ts": bar.timestamp,
+                "open": float(bar.open),
+                "high": float(bar.high),
+                "low": float(bar.low),
+                "close": float(bar.close),
+                "volume": float(bar.volume),
+                "symbol": bar.symbol,
+            }
+            df = pd.DataFrame([raw_dict])
+            df["ts"] = pd.to_datetime(df["ts"], utc=True)
+            df = df.set_index("ts")
+            self.drip_pulse(df)
+        except Exception as e:
+            print(f"[THAL-E-P25-103] Real-time bar processing failed: {e}")
 
     def _record_ingestion_event(
         self,

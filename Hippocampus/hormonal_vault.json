@@ -1,5 +1,4 @@
 {
-  "titanium": null,
   "diamond_rails": {
     "bounds": {
       "stop_loss_mult": {
@@ -17,16 +16,6 @@
     },
     "last_search_ts": "2026-02-15T08:10:00"
   },
-  "bronze": [],
-  "silver": [],
-  "platinum": null,
-  "meta": {
-    "version": "3.2",
-    "last_metabolism_ts": "2026-02-15T08:10:00",
-    "status": "HEALTHY",
-    "description": "Mammon V3.2 Hormonal Vault - Clean Slate"
-  },
-  "bronze_history": [],
   "gold": {
     "id": "scalp_v1_20260419",
     "params": {
@@ -65,5 +54,16 @@
     "fitness_snapshot": 0.5,
     "coronated_at": "2026-02-15T08:10:00",
     "origin": "clean_slate"
-  }
+  },
+  "bronze_history": [],
+  "meta": {
+    "version": "3.2",
+    "last_metabolism_ts": "2026-02-15T08:10:00",
+    "status": "HEALTHY",
+    "description": "Mammon V3.2 Hormonal Vault - Clean Slate"
+  },
+  "titanium": null,
+  "platinum": null,
+  "silver": [],
+  "bronze": []
 }

@@ -357,6 +357,14 @@ class Orchestrator:
         except Exception:
             pass
 
+        # Publish live brain frame snapshot to Redis for MCP / dashboard reads.
+        try:
+            redis_conn = self.librarian.get_redis_connection()
+            frame_json = json.dumps(self.frame.to_synapse_dict(), default=str)
+            redis_conn.set(f"mammon:brain_frame:{symbol}", frame_json, ex=300)
+        except Exception:
+            pass  # Redis unavailable must never block the cycle.
+
         pulse_duration = time.perf_counter() - pulse_start
         self._log_pulse(metrics, pulse_duration, hook_status if "hook_status" in locals() else None)
 

@@ -1,5 +1,5 @@
 """
-Mammon MCP Server — read-only inspection of all engine databases.
+Mammon MCP Server — full read/write access to all engine databases.
 
 Runs as a sidecar container on the same Docker network.
 All AI clients (Claude, Gemini, Codex) connect via SSE: http://localhost:5001/sse
@@ -26,11 +26,11 @@ REDIS_PORT = int(os.getenv("REDIS_PORT", 6379))
 
 # Named registry — all known stores. Clients use these aliases.
 SQLITE_DBS: dict[str, Path] = {
-    "money":   BASE / "runtime/.tmp_test_local/compat_librarian.db",
-    "memory":  BASE / "Hippocampus/Archivist/Ecosystem_Memory.db",
-    "synapse": BASE / "Hippocampus/Archivist/Ecosystem_Synapse.db",
-    "ui":      BASE / "Hippocampus/data/Ecosystem_UI.db",
-    "hospital":BASE / "Hospital/Memory_care/control_logs.db",
+    "money":    BASE / "runtime/.tmp_test_local/compat_librarian.db",
+    "memory":   BASE / "Hippocampus/Archivist/Ecosystem_Memory.db",
+    "synapse":  BASE / "Hippocampus/Archivist/Ecosystem_Synapse.db",
+    "ui":       BASE / "Hippocampus/data/Ecosystem_UI.db",
+    "hospital": BASE / "Hospital/Memory_care/control_logs.db",
 }
 
 DUCKDB_DBS: dict[str, Path] = {
@@ -42,25 +42,10 @@ DUCKDB_DBS: dict[str, Path] = {
 ALL_DBS = {**SQLITE_DBS, **DUCKDB_DBS}
 
 # ---------------------------------------------------------------------------
-# Safety
-# ---------------------------------------------------------------------------
-
-_ALLOWED = re.compile(
-    r"^\s*(SELECT|PRAGMA|DESCRIBE|SHOW|\.schema|EXPLAIN|WITH)\b",
-    re.IGNORECASE,
-)
-
-
-def _safe(sql: str) -> None:
-    if not _ALLOWED.match(sql.strip()):
-        raise ValueError(f"Only read-only queries allowed. Got: {sql[:80]!r}")
-
-
-# ---------------------------------------------------------------------------
 # Connection helpers
 # ---------------------------------------------------------------------------
 
-def _sqlite(name: str) -> sqlite3.Connection:
+def _sqlite_ro(name: str) -> sqlite3.Connection:
     path = SQLITE_DBS.get(name)
     if path is None:
         raise KeyError(f"Unknown sqlite db {name!r}. Known: {list(SQLITE_DBS)}")
@@ -71,13 +56,39 @@ def _sqlite(name: str) -> sqlite3.Connection:
     return conn
 
 
-def _duckdb(name: str) -> duckdb.DuckDBPyConnection:
+def _sqlite_rw(name: str) -> sqlite3.Connection:
+    path = SQLITE_DBS.get(name)
+    if path is None:
+        # Allow raw path as fallback for scan_stores discovered files
+        p = Path(name)
+        if not p.exists():
+            raise FileNotFoundError(f"No sqlite db at {name!r}")
+        conn = sqlite3.connect(str(p))
+        conn.row_factory = sqlite3.Row
+        return conn
+    conn = sqlite3.connect(str(path))
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def _duckdb_ro(name: str) -> duckdb.DuckDBPyConnection:
     path = DUCKDB_DBS.get(name)
     if path is None:
         raise KeyError(f"Unknown duckdb {name!r}. Known: {list(DUCKDB_DBS)}")
     if not path.exists():
         raise FileNotFoundError(f"{name} db not found at {path}")
     return duckdb.connect(str(path), read_only=True)
+
+
+def _duckdb_rw(name: str) -> duckdb.DuckDBPyConnection:
+    path = DUCKDB_DBS.get(name)
+    if path is None:
+        # Allow raw path as fallback for scan_stores discovered files
+        p = Path(name)
+        if not p.exists():
+            raise FileNotFoundError(f"No duckdb at {name!r}")
+        return duckdb.connect(str(p))
+    return duckdb.connect(str(path))
 
 
 def _redis() -> redis_lib.Redis:
@@ -95,6 +106,10 @@ def _duck_rows(conn: duckdb.DuckDBPyConnection, sql: str) -> list[dict]:
     return [dict(zip(cols, row)) for row in rel.fetchall()]
 
 
+def _is_select(sql: str) -> bool:
+    return bool(re.match(r"^\s*(SELECT|PRAGMA|DESCRIBE|SHOW|\.schema|EXPLAIN|WITH)\b", sql.strip(), re.IGNORECASE))
+
+
 # ---------------------------------------------------------------------------
 # MCP server
 # ---------------------------------------------------------------------------
@@ -102,9 +117,12 @@ def _duck_rows(conn: duckdb.DuckDBPyConnection, sql: str) -> list[dict]:
 mcp = FastMCP(
     name="mammon-db",
     instructions=(
-        "Read-only access to all Mammon trading engine databases. "
-        "Use list_dbs() first to see what exists, then schema() to understand a table, "
-        "then query() for arbitrary SQL. brain_frame() and vault() give live Redis state."
+        "Full read/write access to all Mammon trading engine databases and Redis. "
+        "Use list_dbs() first to see what exists, scan_stores() to find every file on disk, "
+        "schema() to inspect tables, query() for SELECT reads, execute() for writes "
+        "(DELETE, DROP, INSERT, UPDATE, CREATE). "
+        "Use redis_delete() / redis_flush() to clean Redis keys. "
+        "brain_frame() and vault() give live Redis engine state."
     ),
 )
 
@@ -117,13 +135,49 @@ def list_dbs() -> dict:
         result[name] = {"type": "sqlite", "path": str(path), "exists": path.exists()}
     for name, path in DUCKDB_DBS.items():
         result[name] = {"type": "duckdb", "path": str(path), "exists": path.exists()}
-    # Redis is always checked live
     try:
         _redis().ping()
         result["redis"] = {"type": "redis", "host": REDIS_HOST, "port": REDIS_PORT, "reachable": True}
     except Exception as e:
         result["redis"] = {"type": "redis", "reachable": False, "error": str(e)}
     return result
+
+
+@mcp.tool()
+def scan_stores() -> dict:
+    """
+    Walk the entire Mammon base directory and return every SQLite and DuckDB file found.
+    Includes files not in the named registry (e.g. UUID test artifacts in runtime/).
+    Each entry shows path, size_bytes, type, and whether it's a known alias.
+    """
+    known_paths = {str(p): alias for alias, p in ALL_DBS.items()}
+    found: dict[str, dict] = {}
+
+    for ext in ("*.db", "*.sqlite", "*.sqlite3", "*.duckdb"):
+        for p in BASE.rglob(ext):
+            if p.is_file():
+                alias = known_paths.get(str(p))
+                # Detect type: duckdb files have a magic header
+                db_type = "duckdb" if p.suffix == ".duckdb" else "sqlite"
+                if db_type == "sqlite":
+                    # Double-check via magic bytes
+                    try:
+                        with open(p, "rb") as f:
+                            magic = f.read(16)
+                        if magic.startswith(b"DUCK"):
+                            db_type = "duckdb"
+                    except OSError:
+                        pass
+                found[str(p)] = {
+                    "type": db_type,
+                    "size_bytes": p.stat().st_size,
+                    "alias": alias,
+                    "in_registry": alias is not None,
+                    "relative": str(p.relative_to(BASE)),
+                }
+
+    # Sort by path for readability
+    return dict(sorted(found.items()))
 
 
 @mcp.tool()
@@ -135,18 +189,20 @@ def schema(db: str, table: Optional[str] = None) -> list[dict]:
     db must be an alias from list_dbs() (not 'redis').
     """
     if db in SQLITE_DBS:
-        conn = _sqlite(db)
+        conn = _sqlite_ro(db)
         try:
             if table:
                 cur = conn.execute(f"PRAGMA table_info({table})")
                 return _rows_to_dicts(cur)
             else:
-                cur = conn.execute("SELECT name, type FROM sqlite_master WHERE type IN ('table','view') ORDER BY name")
+                cur = conn.execute(
+                    "SELECT name, type FROM sqlite_master WHERE type IN ('table','view') ORDER BY name"
+                )
                 return _rows_to_dicts(cur)
         finally:
             conn.close()
     elif db in DUCKDB_DBS:
-        conn = _duckdb(db)
+        conn = _duckdb_ro(db)
         try:
             if table:
                 return _duck_rows(conn, f"DESCRIBE {table}")
@@ -163,12 +219,12 @@ def query(db: str, sql: str, limit: int = 200) -> list[dict]:
     """
     Run a read-only SQL query against a named database.
     db must be an alias from list_dbs() (not 'redis').
-    A LIMIT clause is appended automatically if not present (max 200 rows).
-    Only SELECT / PRAGMA / DESCRIBE / WITH / EXPLAIN are allowed.
+    A LIMIT clause is appended automatically for SELECT queries (max 500 rows).
+    Only SELECT / PRAGMA / DESCRIBE / WITH / EXPLAIN are allowed — use execute() for writes.
     """
-    _safe(sql)
+    if not _is_select(sql):
+        raise ValueError(f"query() is read-only. Use execute() for writes. Got: {sql[:80]!r}")
 
-    # Auto-limit guard
     if limit > 500:
         limit = 500
     stripped = sql.rstrip().rstrip(";")
@@ -176,16 +232,66 @@ def query(db: str, sql: str, limit: int = 200) -> list[dict]:
         stripped = f"{stripped} LIMIT {limit}"
 
     if db in SQLITE_DBS:
-        conn = _sqlite(db)
+        conn = _sqlite_ro(db)
         try:
             cur = conn.execute(stripped)
             return _rows_to_dicts(cur)
         finally:
             conn.close()
     elif db in DUCKDB_DBS:
-        conn = _duckdb(db)
+        conn = _duckdb_ro(db)
         try:
             return _duck_rows(conn, stripped)
+        finally:
+            conn.close()
+    else:
+        raise KeyError(f"Unknown db {db!r}. Use list_dbs() to see options.")
+
+
+@mcp.tool()
+def execute(db: str, sql: str) -> dict:
+    """
+    Execute any SQL statement against a named database — full write access.
+    Handles DELETE, DROP, INSERT, UPDATE, CREATE, TRUNCATE, and SELECT.
+    db must be an alias from list_dbs() (not 'redis').
+    For SELECT queries, returns up to 500 rows.
+    For write statements, returns rows_affected and success status.
+
+    Examples:
+      execute('money', 'DELETE FROM money_orders')
+      execute('synapse', 'DROP TABLE IF EXISTS synapse_mint')
+      execute('params', 'DELETE FROM param_lineage WHERE created_at < ...')
+    """
+    is_read = _is_select(sql)
+
+    if db in SQLITE_DBS:
+        conn = _sqlite_rw(db)
+        try:
+            cur = conn.execute(sql)
+            if is_read:
+                rows = _rows_to_dicts(cur)
+                conn.commit()
+                return {"rows": rows[:500], "count": len(rows)}
+            else:
+                conn.commit()
+                return {"success": True, "rows_affected": cur.rowcount, "sql": sql}
+        except Exception as e:
+            conn.rollback()
+            return {"success": False, "error": str(e), "sql": sql}
+        finally:
+            conn.close()
+    elif db in DUCKDB_DBS:
+        conn = _duckdb_rw(db)
+        try:
+            rel = conn.execute(sql)
+            if is_read:
+                cols = [d[0] for d in rel.description]
+                rows = [dict(zip(cols, row)) for row in rel.fetchall()]
+                return {"rows": rows[:500], "count": len(rows)}
+            else:
+                return {"success": True, "sql": sql}
+        except Exception as e:
+            return {"success": False, "error": str(e), "sql": sql}
         finally:
             conn.close()
     else:
@@ -196,7 +302,7 @@ def query(db: str, sql: str, limit: int = 200) -> list[dict]:
 def redis_get(key: str) -> Any:
     """
     Fetch a single Redis key. Returns parsed JSON if the value is JSON,
-    otherwise returns the raw string. Use 'LIST' or 'HASH' prefix hints if needed.
+    otherwise returns the raw string.
     """
     r = _redis()
     t = r.type(key)
@@ -222,7 +328,7 @@ def redis_get(key: str) -> Any:
 def redis_scan(pattern: str = "mammon:*", count: int = 100) -> list[str]:
     """
     Scan Redis for keys matching a glob pattern.
-    Default pattern returns all Mammon keys. Use count to limit results.
+    Default pattern returns all Mammon keys.
     """
     r = _redis()
     keys = []
@@ -236,11 +342,44 @@ def redis_scan(pattern: str = "mammon:*", count: int = 100) -> list[str]:
 
 
 @mcp.tool()
+def redis_delete(keys: list[str]) -> dict:
+    """
+    Delete one or more Redis keys by exact name.
+    Returns the number of keys actually deleted.
+    Example: redis_delete(['mammon:brain_frame:AAPL', 'mammon:hormonal_vault'])
+    """
+    r = _redis()
+    deleted = r.delete(*keys)
+    return {"deleted": deleted, "requested": len(keys), "keys": keys}
+
+
+@mcp.tool()
+def redis_flush(pattern: str) -> dict:
+    """
+    Delete ALL Redis keys matching a glob pattern. Use with care.
+    Returns count of deleted keys.
+    Example: redis_flush('mammon:brain_frame:*')  — wipes all brain frames
+             redis_flush('mammon:*')               — wipes all Mammon state
+    """
+    r = _redis()
+    keys = []
+    cursor = 0
+    while True:
+        cursor, batch = r.scan(cursor, match=pattern, count=200)
+        keys.extend(batch)
+        if cursor == 0:
+            break
+    if not keys:
+        return {"deleted": 0, "pattern": pattern, "note": "No keys matched"}
+    deleted = r.delete(*keys)
+    return {"deleted": deleted, "pattern": pattern, "keys_removed": keys}
+
+
+@mcp.tool()
 def brain_frame() -> dict:
     """
     Return all current brain frame(s) from Redis.
     Keys follow the pattern mammon:brain_frame:*.
-    Returns a dict keyed by frame key → parsed frame dict.
     """
     r = _redis()
     cursor = 0
@@ -291,13 +430,13 @@ def recent_pulses(n: int = 20) -> list[dict]:
     """
     if n > 200:
         n = 200
-    conn = _sqlite("synapse")
+    conn = _sqlite_ro("synapse")
     try:
         cur = conn.execute(
             "SELECT * FROM synapse_mint ORDER BY rowid DESC LIMIT ?", (n,)
         )
         rows = _rows_to_dicts(cur)
-        return list(reversed(rows))  # chronological order
+        return list(reversed(rows))
     except sqlite3.OperationalError as e:
         return [{"error": str(e), "note": "synapse_mint may not exist yet — engine has not run"}]
     finally:
@@ -309,14 +448,13 @@ def money_tape(n: int = 20) -> dict:
     """
     Return the most recent N rows from each money table in the TreasuryGland store:
     money_orders, money_fills, money_positions, money_pnl_snapshots.
-    This is the actual trade and P&L record.
     """
     if n > 200:
         n = 200
     tables = ["money_orders", "money_fills", "money_positions", "money_pnl_snapshots"]
     result = {}
     try:
-        conn = _sqlite("money")
+        conn = _sqlite_ro("money")
     except FileNotFoundError:
         return {"error": "money db not found — TreasuryGland has not run yet"}
     try:

@@ -25,6 +25,7 @@ class SmartGland:
         self.current_window_start: Optional[datetime] = None
         self._seed_fired = False
         self._action_fired = False
+        self._live_mode = False  # Set True after warmup; enables clock-aligned MINT
 
         # Telemetry (Piece 13)
         self.telemetry = {
@@ -176,6 +177,38 @@ class SmartGland:
             
             if not remainder.empty:
                 self.raw_list.extend(list(remainder.itertuples(index=True, name=None)))
+
+            # Clock-aligned MINT: fire exactly at the 5m market boundary rather than
+            # waiting for the first bar of the next window (which arrives ~1 min late).
+            # Only active in live mode to avoid misfiring during warmup batch-ingests.
+            if self._live_mode and self.current_window_start is not None and self.raw_list:
+                now_utc = pd.Timestamp.now(tz="UTC")
+                ws = self.current_window_start
+                if getattr(ws, "tzinfo", None) is None:
+                    ws = pd.Timestamp(ws, tz="UTC")
+                window_end = ws + pd.Timedelta(minutes=self.window_minutes)
+                if now_utc >= window_end:
+                    clock_df = pd.DataFrame(
+                        [x[1:] for x in self.raw_list],
+                        index=[x[0] for x in self.raw_list],
+                        columns=window_slice.columns,
+                    )
+                    if not self._action_fired:
+                        action_agg = self._agg_window(clock_df)
+                        if not action_agg.empty:
+                            pulses.append(("ACTION", self._wrap_with_context(action_agg, "ACTION")))
+                            self._action_fired = True
+                            self.telemetry["action_emitted"] += 1
+                    mint_agg = self._agg_window(clock_df)
+                    if not mint_agg.empty:
+                        pulses.append(("MINT", self._wrap_with_context(mint_agg, "MINT")))
+                        self.context_df = pd.concat([self.context_df, mint_agg]).tail(self.context_size)
+                        self.telemetry["mint_emitted"] += 1
+                    self.raw_list = []
+                    self._reset_window_markers()
+                    # Advance window pointer so the next window's bar doesn't re-trigger
+                    # the bar-based MINT guard and double-fire.
+                    self.current_window_start = ws + pd.Timedelta(minutes=self.window_minutes)
 
         return pulses
 

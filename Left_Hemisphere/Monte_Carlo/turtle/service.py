@@ -7,6 +7,7 @@ import pandas as pd
 from Hippocampus.Archivist.librarian import Librarian
 from Hippocampus.Archivist.optimizer_librarian import OptimizerLibrarian
 from Cerebellum.Soul.brain_frame import BrainFrame
+from Left_Hemisphere.Monte_Carlo.walk.service import QuantizedGeometricWalk
 
 class TurtleMonte:
     """
@@ -25,6 +26,7 @@ class TurtleMonte:
         self.lane_weights = np.array([0.15, 0.35, 0.50], dtype=float)
         self.mode = mode
         self.librarian = Librarian()
+        self.walk = QuantizedGeometricWalk(mode=mode)
         self.rng = np.random.default_rng()
         self.legacy_simulation_calls = 0
         self.last_sim_event: Dict[str, Any] = {}
@@ -65,7 +67,30 @@ class TurtleMonte:
         
         stop_level = float(stop_level)
         effective_atr = atr
-        
+
+        # Populate frame.risk with regime-aware walk parameters before reading them below.
+        try:
+            _council_state = {
+                "confidence": frame.environment.confidence,
+                "inputs": {
+                    "close": current_price,
+                    "avwap": current_price,
+                    "atr": atr,
+                    "atr_avg": float(getattr(frame.environment, "atr_avg", atr) or atr),
+                    "volume": 0.0,
+                    "vol_avg": 1.0,
+                    "adx": float(getattr(frame.environment, "adx", 25.0) or 25.0),
+                },
+            }
+            self.walk.build_seed(
+                council_state=_council_state,
+                pulse_type=str(pulse_type or "ACTION"),
+                run_id=str(getattr(frame.market, "symbol", "NA")),
+                frame=frame,
+            )
+        except Exception:
+            pass  # Walk failures must never block simulation.
+
         n_steps = int(gear)
         paths_per_lane = int(self.config.get("paths_per_lane", 10000))
         total_paths = paths_per_lane * 3

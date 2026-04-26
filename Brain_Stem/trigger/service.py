@@ -552,6 +552,22 @@ class Trigger:
                 self._fire_physical(symbol, "SELL", qty_held, price)
                 if self.treasury:
                     sell_intent_id = f"{symbol}:{int(time.time()*1000)}:sell"
+                    self.treasury.record_intent({
+                        "intent_id": sell_intent_id,
+                        "ts": time.time(),
+                        "symbol": symbol,
+                        "side": "SELL",
+                        "qty": qty_held,
+                        "trigger_pulse": pulse,
+                        "mode": self.execution_mode,
+                        "price_ref": price,
+                        "mean": self.position.get("mean_at_entry", price),
+                        "sigma": self.position.get("sigma_at_entry", 0.0),
+                        "z_score": z_score,
+                        "risk_score": 0.0,
+                        "confidence": 0.0,
+                        "reason": exit_reason,
+                    })
                     self.treasury.fire_intent(
                         sell_intent_id, symbol, "SELL", qty_held, price,
                         sigma=self.position.get("sigma_at_entry", 0.0),

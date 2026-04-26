@@ -523,10 +523,19 @@ def _engine_loop(symbols: list, is_crypto_map: dict):
                     },
                 )
 
+        # ── Warmup: prime SmartGland context concurrently with boundary wait ──
+        _is_crypto_first = next(iter(is_crypto_map.values()), True)
+        _warmup_thread = threading.Thread(
+            target=lambda: thalamus.warmup_context(symbols, is_crypto=_is_crypto_first),
+            daemon=True,
+            name="mammon-warmup",
+        )
+        _warmup_thread.start()
+
         # ── Wait for the nearest 5-minute boundary ──
         import math
         now_ts = time.time()
-        target = math.ceil(now_ts / 300) * 300 
+        target = math.ceil(now_ts / 300) * 300
         wait_sec = max(target - time.time(), 0)
         
         state.push_event("system", {
@@ -550,104 +559,121 @@ def _engine_loop(symbols: list, is_crypto_map: dict):
             return
             
         state.push_event("system", {"msg": "Boundary reached — pipeline live"})
-        print("[DASHBOARD] Boundary reached — starting poll loop")
+        print("[DASHBOARD] Boundary reached — starting live stream")
+        _warmup_thread.join(timeout=30.0)
 
-        # Poll loop
-        poll_interval_sec = 0.5
-        last_seen_bar_ts: Dict[str, Any] = {}
-        boot_window_start = int(target)  # Exact boundary we synced to — no race with time.time()
+        # ── Live WebSocket stream ──
+        import asyncio as _asyncio
 
-        while state.running:
-            for symbol in symbols:
-                if not state.running:
-                    break
+        _stream_errors: list = []
+        _stream_loop = _asyncio.new_event_loop()
+
+        async def _on_live_bar(bar) -> None:
+            if not state.running:
+                return
+            symbol = getattr(bar, "symbol", symbols[0] if symbols else "")
+            with state.lock:
+                state.active_symbol = symbol
+                loop_mode = state.mode
+            try:
+                import pandas as _pd
+                raw_dict = {
+                    "ts": bar.timestamp,
+                    "open": float(bar.open),
+                    "high": float(bar.high),
+                    "low": float(bar.low),
+                    "close": float(bar.close),
+                    "volume": float(bar.volume),
+                    "symbol": symbol,
+                }
+                raw_df = _pd.DataFrame([raw_dict])
+                raw_df["ts"] = _pd.to_datetime(raw_df["ts"], utc=True)
+                raw_df = raw_df.set_index("ts")
+                bar_ts = raw_df.index[0]
+
+                pulses = thalamus.drip_pulse(raw_df)
+                _publish_furnace_run_events(symbol)
 
                 with state.lock:
-                    state.active_symbol = symbol
-                    loop_mode = state.mode
+                    state.bars_processed += 1
 
-                is_crypto = is_crypto_map.get(symbol, True)
+                if pulses:
+                    frame = orchestrator.frame
+                    for pulse_type, pulse_df in pulses:
+                        if not pulse_df.empty and {"open", "high", "low", "close", "volume"}.issubset(pulse_df.columns):
+                            pr = pulse_df.iloc[-1]
+                            pulse_bar_dict = {
+                                "bar_time": int(bar_ts.timestamp()),
+                                "bar_open": round(float(pr["open"]), 4),
+                                "bar_high": round(float(pr["high"]), 4),
+                                "bar_low": round(float(pr["low"]), 4),
+                                "bar_close": round(float(pr["close"]), 4),
+                                "bar_volume": round(float(pr["volume"]), 2),
+                            }
+                        else:
+                            pulse_bar_dict = {
+                                "bar_time": int(bar_ts.timestamp()),
+                                "bar_open": round(float(raw_df.iloc[0]["open"]), 4),
+                                "bar_high": round(float(raw_df.iloc[0]["high"]), 4),
+                                "bar_low": round(float(raw_df.iloc[0]["low"]), 4),
+                                "bar_close": round(float(raw_df.iloc[0]["close"]), 4),
+                                "bar_volume": round(float(raw_df.iloc[0]["volume"]), 2),
+                            }
+                        event_data = _frame_to_event(
+                            frame, symbol, pulse_type, loop_mode,
+                            bar_dict=pulse_bar_dict,
+                        )
+                        with state.lock:
+                            state.last_frame_dict = event_data
+                        state.push_event("pulse", event_data)
 
+            except Exception as e:
+                emit_mner(
+                    "THAL-E-CONN-001",
+                    "DATA_CONNECTION_DROP",
+                    source="dashboard._on_live_bar",
+                    details={"symbol": symbol, "error": _safe_str(e, 300)},
+                    echo=True,
+                )
                 try:
+                    bs = orchestrator.lobes.get("Brain_Stem")
+                    if bs and bs.pending_entry:
+                        intent_id = bs.pending_entry.get("intent_id")
+                        if intent_id and bs.treasury:
+                            bs.treasury.cancel_intent(intent_id, symbol, "DATA_CONNECTION_DROP")
+                        bs.pending_entry = None
+                        bs.mean_dev_monitor_active = False
+                except Exception:
+                    pass
+                state.push_event("error", {"symbol": symbol, "msg": _safe_str(e)})
 
-                    latest = thalamus.get_latest_bar(symbol=symbol, is_crypto=is_crypto)
-                    raw_df, bar_ts = _bar_to_dict(latest, symbol)
-                    if raw_df is None or bar_ts is None:
-                        continue
+        def _run_stream() -> None:
+            try:
+                _asyncio.set_event_loop(_stream_loop)
+                _stream_loop.run_until_complete(
+                    thalamus.connect_stream(symbols, _is_crypto_first, bar_callback=_on_live_bar)
+                )
+            except Exception as e:
+                _stream_errors.append(e)
 
-                    # Update window tracker from bar data
-                    this_bar_window = (int(bar_ts.timestamp()) // 300) * 300
+        _stream_thread = threading.Thread(target=_run_stream, daemon=True, name="mammon-stream")
+        _stream_thread.start()
 
-                    # Discard bars from the window before we booted — they would fire
-                    # stale SEED/ACTION into the new window and corrupt the pulse order.
-                    if this_bar_window < boot_window_start:
-                        continue
+        while state.running:
+            if _stream_errors:
+                raise _stream_errors[0]
+            time.sleep(0.5)
 
-                    prev = last_seen_bar_ts.get(symbol)
-                    if prev is not None and bar_ts <= prev:
-                        continue
-
-                    last_seen_bar_ts[symbol] = bar_ts
-                    pulses = thalamus.drip_pulse(raw_df)
-                    _publish_furnace_run_events(symbol)
-
-                    with state.lock:
-                        state.bars_processed += 1
-
-                    if pulses:
-                        frame = orchestrator.frame
-                        for pulse_type, pulse_df in pulses:
-                            # Use this pulse's own aggregated OHLCV for the bar display
-                            # so each event shows the price at the moment of that pulse.
-                            if not pulse_df.empty and {"open","high","low","close","volume"}.issubset(pulse_df.columns):
-                                pr = pulse_df.iloc[-1]
-                                pulse_bar_dict = {
-                                    "bar_time": int(bar_ts.timestamp()),
-                                    "bar_open": round(float(pr["open"]), 4),
-                                    "bar_high": round(float(pr["high"]), 4),
-                                    "bar_low": round(float(pr["low"]), 4),
-                                    "bar_close": round(float(pr["close"]), 4),
-                                    "bar_volume": round(float(pr["volume"]), 2),
-                                }
-                            else:
-                                pulse_bar_dict = {
-                                    "bar_time": int(bar_ts.timestamp()),
-                                    "bar_open": round(float(raw_df.iloc[0]["open"]), 4),
-                                    "bar_high": round(float(raw_df.iloc[0]["high"]), 4),
-                                    "bar_low": round(float(raw_df.iloc[0]["low"]), 4),
-                                    "bar_close": round(float(raw_df.iloc[0]["close"]), 4),
-                                    "bar_volume": round(float(raw_df.iloc[0]["volume"]), 2),
-                                }
-                            event_data = _frame_to_event(
-                                frame, symbol, pulse_type, loop_mode,
-                                bar_dict=pulse_bar_dict,
-                            )
-                            with state.lock:
-                                state.last_frame_dict = event_data
-                            state.push_event("pulse", event_data)
-
-                except Exception as e:
-                    emit_mner(
-                        "THAL-E-CONN-001",
-                        "DATA_CONNECTION_DROP",
-                        source="dashboard._engine_loop.poll",
-                        details={"symbol": symbol, "error": _safe_str(e, 300)},
-                        echo=True,
-                    )
-                    # Cancel any pending Brain_Stem entry — data is stale, window is lost
-                    try:
-                        bs = orchestrator.lobes.get("Brain_Stem")
-                        if bs and bs.pending_entry:
-                            intent_id = bs.pending_entry.get("intent_id")
-                            if intent_id and bs.treasury:
-                                bs.treasury.cancel_intent(intent_id, symbol, "DATA_CONNECTION_DROP")
-                            bs.pending_entry = None
-                            bs.mean_dev_monitor_active = False
-                    except Exception:
-                        pass
-                    state.push_event("error", {"symbol": symbol, "msg": _safe_str(e)})
-
-            time.sleep(poll_interval_sec)
+        # Stop the WebSocket stream cleanly
+        try:
+            if not _stream_loop.is_closed():
+                future = _asyncio.run_coroutine_threadsafe(
+                    thalamus.stop_stream(_is_crypto_first), _stream_loop
+                )
+                future.result(timeout=5.0)
+        except Exception:
+            pass
+        _stream_thread.join(timeout=10.0)
 
     except Exception as e:
         crash_exc = e

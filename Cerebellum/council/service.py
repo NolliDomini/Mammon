@@ -66,7 +66,7 @@ class Council:
             
             results["atr"] = self._calculate_atr_score(df)
             results["adx"] = self._calculate_adx_score(df)
-            results["vol"] = self._calculate_vol_score(df)
+            results["vol"] = {"score": float(frame.environment.spread_score), "val": 0.0, "avg": 0.0}
             results["vwap"] = self._calculate_vwap_score(df)
             self.telemetry["status"] = "SUCCESS"
         except Exception as e:
