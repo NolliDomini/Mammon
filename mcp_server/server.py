@@ -71,13 +71,34 @@ def _sqlite_rw(name: str) -> sqlite3.Connection:
     return conn
 
 
+def _duckdb_stale_lock(e: Exception) -> bool:
+    """True when a dead process left its PID in the DuckDB lock (common in Docker)."""
+    msg = str(e)
+    return "Could not set lock" in msg and "PID 0" in msg
+
+
+def _duckdb_nuke(path: Path) -> None:
+    """Delete a DuckDB file and its WAL sidecar so a fresh connection can be made."""
+    for f in [path, Path(str(path) + ".wal")]:
+        try:
+            f.unlink()
+        except FileNotFoundError:
+            pass
+
+
 def _duckdb_ro(name: str) -> duckdb.DuckDBPyConnection:
     path = DUCKDB_DBS.get(name)
     if path is None:
         raise KeyError(f"Unknown duckdb {name!r}. Known: {list(DUCKDB_DBS)}")
     if not path.exists():
         raise FileNotFoundError(f"{name} db not found at {path}")
-    return duckdb.connect(str(path), read_only=True)
+    try:
+        return duckdb.connect(str(path), read_only=True)
+    except Exception as e:
+        if _duckdb_stale_lock(e):
+            _duckdb_nuke(path)
+            return duckdb.connect(str(path), read_only=True)
+        raise
 
 
 def _duckdb_rw(name: str) -> duckdb.DuckDBPyConnection:
@@ -88,7 +109,13 @@ def _duckdb_rw(name: str) -> duckdb.DuckDBPyConnection:
         if not p.exists():
             raise FileNotFoundError(f"No duckdb at {name!r}")
         return duckdb.connect(str(p))
-    return duckdb.connect(str(path))
+    try:
+        return duckdb.connect(str(path))
+    except Exception as e:
+        if _duckdb_stale_lock(e):
+            _duckdb_nuke(path)
+            return duckdb.connect(str(path))
+        raise
 
 
 def _redis() -> redis_lib.Redis:
