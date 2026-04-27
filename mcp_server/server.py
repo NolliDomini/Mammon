@@ -427,15 +427,38 @@ def recent_pulses(n: int = 20) -> list[dict]:
     """
     Return the most recent N rows from synapse_mint (the main pulse tape).
     Each row is one SEED/ACTION/MINT event with all BrainFrame slots captured.
+    Tries DuckDB first (authoritative when engine is stopped); falls back to
+    SQLite (available when engine holds the DuckDB exclusive write lock).
     """
     if n > 200:
         n = 200
+
+    # DuckDB path — holds today's data written by the Librarian/TheBrain amygdala.
+    # Will fail with a lock error while the engine process is running (exclusive lock).
+    try:
+        conn = _duckdb_ro("synapse_duck")
+        try:
+            rows = _duck_rows(
+                conn,
+                f"SELECT * FROM synapse_mint ORDER BY ts DESC LIMIT {n}",
+            )
+            for r in rows:
+                r["_source"] = "duckdb"
+            return list(reversed(rows))
+        finally:
+            conn.close()
+    except Exception:
+        pass  # Engine is running and holds the exclusive write lock — fall through.
+
+    # SQLite fallback — written by the SynapseScribe/local amygdala path.
     conn = _sqlite_ro("synapse")
     try:
         cur = conn.execute(
             "SELECT * FROM synapse_mint ORDER BY rowid DESC LIMIT ?", (n,)
         )
         rows = _rows_to_dicts(cur)
+        for r in rows:
+            r["_source"] = "sqlite"
         return list(reversed(rows))
     except sqlite3.OperationalError as e:
         return [{"error": str(e), "note": "synapse_mint may not exist yet — engine has not run"}]

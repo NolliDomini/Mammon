@@ -14,9 +14,15 @@ class SynapseScribe:
     def __init__(self, db_path: Path | str):
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        self.conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
-        self.conn.row_factory = sqlite3.Row
+        self.conn = self._open_conn()
         self._ensure_schema()
+
+    def _open_conn(self) -> sqlite3.Connection:
+        conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA busy_timeout=5000")
+        return conn
 
     def _ensure_schema(self):
         self.conn.execute(
@@ -76,8 +82,11 @@ class SynapseScribe:
             if key in existing:
                 continue
             col_type = self._infer_sql_type(value)
-            self.conn.execute(f'ALTER TABLE synapse_mint ADD COLUMN "{key}" {col_type}')
-            existing.add(key)
+            try:
+                self.conn.execute(f'ALTER TABLE synapse_mint ADD COLUMN "{key}" {col_type}')
+                existing.add(key)
+            except sqlite3.OperationalError:
+                pass  # Column already added by a concurrent writer
 
     def mint(self, ticket: Dict[str, Any]):
         if not isinstance(ticket, dict):
@@ -99,6 +108,18 @@ class SynapseScribe:
             VALUES ({placeholders})
             ON CONFLICT(machine_code) DO UPDATE SET {update_sql}
         """
-        self.conn.execute(sql, vals)
-        self.conn.commit()
+        try:
+            self.conn.execute(sql, vals)
+            self.conn.commit()
+        except sqlite3.OperationalError:
+            # Connection may have gone stale — reopen and retry once.
+            try:
+                self.conn.close()
+            except Exception:
+                pass
+            self.conn = self._open_conn()
+            self._ensure_schema()
+            self._ensure_columns(ticket)
+            self.conn.execute(sql, vals)
+            self.conn.commit()
 
