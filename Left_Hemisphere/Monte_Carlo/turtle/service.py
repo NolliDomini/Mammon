@@ -62,6 +62,7 @@ class TurtleMonte:
             self._safe_risk_reset(frame, reason="invalid_price")
             return 0.0
         if atr <= 0.0:
+            print(f"   [TURTLE_MONTE] SKIP {pulse_type}: atr=0 (ATR warming up)")
             self._safe_risk_reset(frame, reason="invalid_atr")
             return 0.0
         
@@ -162,6 +163,9 @@ class TurtleMonte:
         frame.risk.lane_survivals = [float(rates[0]), float(rates[1]), float(rates[2])]
         
         duration = time.perf_counter() - pulse_start
+        print(f"   [TURTLE_MONTE] {pulse_type} score={monte_score:.3f} "
+              f"worst={rates[0]:.2f} neutral={rates[1]:.2f} best={rates[2]:.2f} "
+              f"atr={atr:.2f} gear={n_steps} paths={total_paths} ({duration*1000:.1f}ms)")
         self._log_simulation(pulse_type, start_ts, duration, n_steps, paths_per_lane, total_paths, current_price, atr, stop_level, frame.environment.confidence, rates, monte_score)
         self.last_sim_event = {
             "pulse_type": str(pulse_type),

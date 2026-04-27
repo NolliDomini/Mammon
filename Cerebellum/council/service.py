@@ -220,17 +220,20 @@ class Council:
         window = int(self.config.get("atr_window", 14))
         avg_window = int(self.config.get("atr_avg_window", 50))
 
-        if len(df) < avg_window: 
+        # Need window+1 rows minimum for the kernel to produce a real ATR value.
+        # avg is computed over however many valid (nonzero) values exist, up to avg_window.
+        if len(df) < window + 1:
             return {"score": 0.0, "val": 0.0, "avg": 0.0}
 
         high_arr = df["high"].to_numpy(dtype=np.float64)
         low_arr = df["low"].to_numpy(dtype=np.float64)
         close_arr = df["close"].to_numpy(dtype=np.float64)
-        
+
         atr_series = calculate_atr_njit(high_arr, low_arr, close_arr, window)
         last_atr = float(atr_series[-1])
-        avg_atr = float(np.mean(atr_series[-avg_window:]))
-        
+        valid = atr_series[atr_series > 0]
+        avg_atr = float(np.mean(valid[-avg_window:])) if len(valid) > 0 else last_atr
+
         ratio = (last_atr / avg_atr) if avg_atr > 0 else 0.0
         return {"score": float(np.clip(ratio - 0.5, 0, 1)), "val": last_atr, "avg": avg_atr}
 
