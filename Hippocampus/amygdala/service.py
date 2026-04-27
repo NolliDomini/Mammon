@@ -23,7 +23,7 @@ class Amygdala:
         )
         self.scribe = scribe or SynapseScribe(db_path=self._primary_db_path)
         self._scribes: Dict[str, SynapseScribe] = {"PRIMARY": self.scribe}
-        configured_pulses = self.config.get("synapse_persist_pulse_types", ["MINT"])
+        configured_pulses = self.config.get("synapse_persist_pulse_types", ["SEED", "ACTION", "MINT"])
         if isinstance(configured_pulses, str):
             configured_pulses = [configured_pulses]
         self.persist_pulse_types: Set[str] = {
@@ -130,7 +130,7 @@ class Amygdala:
             self.last_write_status = "ERROR"
             self.last_error_code = "WRITE_FAILURE"
             self.last_error_message = str(e)
-            print(f"[AMYGDALA_ERROR] mint_synapse_ticket failed: {e}")
+            print(f"[AMYGDALA_ERROR] mint_synapse_ticket failed ({pulse_type_u}): {type(e).__name__}: {e}")
 
     def get_state(self):
         return {

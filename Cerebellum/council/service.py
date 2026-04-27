@@ -106,7 +106,6 @@ class Council:
             w_adx = float(override.get("w_adx", self.config.get("council_w_adx", 0.60)))
             w_vol = float(override.get("w_vol", self.config.get("council_w_vol", 0.30)))
             w_vwap = float(override.get("w_vwap", self.config.get("council_w_vwap", 0.04)))
-            w_spread = float(override.get("w_spread", self.config.get("council_w_spread", 0.15))) # Piece 54
             if override.get("trace"):
                 print(f"   [COUNCIL] Applied regime override: {regime_id} -> {override['trace']}")
         else:
@@ -114,21 +113,17 @@ class Council:
             w_adx = float(self.config.get("council_w_adx", 0.60))
             w_vol = float(self.config.get("council_w_vol", 0.30))
             w_vwap = float(self.config.get("council_w_vwap", 0.04))
-            w_spread = float(self.config.get("council_w_spread", 0.15)) # Piece 54
 
-        # Piece 54: Blend spread_score into confidence
-        spread_score = frame.environment.spread_score
-        
+        # vol slot carries spread_score (see results["vol"] above)
         confidence_score = (
-            (results["atr"]["score"] * w_atr) + 
-            (results["adx"]["score"] * w_adx) + 
-            (results["vol"]["score"] * w_vol) + 
-            (results["vwap"]["score"] * w_vwap) +
-            (spread_score * w_spread) # Piece 54
+            (results["atr"]["score"] * w_atr) +
+            (results["adx"]["score"] * w_adx) +
+            (results["vol"]["score"] * w_vol) +
+            (results["vwap"]["score"] * w_vwap)
         )
-        
+
         # Normalize sum
-        total_w = w_atr + w_adx + w_vol + w_vwap + w_spread
+        total_w = w_atr + w_adx + w_vol + w_vwap
         if total_w > 0:
             confidence_score /= total_w
             

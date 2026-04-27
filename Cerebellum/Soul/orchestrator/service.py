@@ -249,11 +249,14 @@ class Orchestrator:
                     echo=True,
                 )
 
-            # 6. Signal-Based Decisions
+            # 6. Continuous Risk Assessment — runs every ACTION regardless of signal
+            if pulse_type == "ACTION" and lh_ready:
+                self._run_lobe("Left_Hemisphere", self.lobes["Left_Hemisphere"].simulate, metrics, pulse_type, frame=self.frame, walk_seed=walk_seed)
+                self._run_lobe("Corpus", self.lobes["Corpus"].score_tier, metrics, pulse_type, frame=self.frame)
+
+            # 6b. Signal-Based Decisions — trade path requires tier1_signal
             if self.frame.structure.tier1_signal == 1:
                 if pulse_type == "ACTION" and lh_ready:
-                    self._run_lobe("Left_Hemisphere", self.lobes["Left_Hemisphere"].simulate, metrics, pulse_type, frame=self.frame, walk_seed=walk_seed)
-                    self._run_lobe("Corpus", self.lobes["Corpus"].score_tier, metrics, pulse_type, frame=self.frame)
                     self._run_lobe("Gatekeeper", self.lobes["Gatekeeper"].decide, metrics, pulse_type, frame=self.frame)
 
                     # Piece 94: Allocate Quantity.
@@ -284,9 +287,9 @@ class Orchestrator:
 
                     if self.frame.command.ready_to_fire:
                         # V6: Whole Brain Engagement (Risk + Valuation Gates)
-                        self._run_lobe("Brain_Stem", self.lobes["Brain_Stem"].load_and_hunt, metrics, pulse_type, 
+                        self._run_lobe("Brain_Stem", self.lobes["Brain_Stem"].load_and_hunt, metrics, pulse_type,
                                       frame=self.frame, orchestrator=self, walk_engine=self.walk_engine, walk_seed=walk_seed)
-                
+
                 elif pulse_type == "SEED" and lh_ready:
                     self._run_lobe("Left_Hemisphere", self.lobes["Left_Hemisphere"].simulate, metrics, pulse_type, frame=self.frame, walk_seed=walk_seed)
 
