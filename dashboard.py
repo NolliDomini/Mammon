@@ -543,7 +543,7 @@ def _engine_loop(symbols: list, is_crypto_map: dict):
         })
         print(f"[DASHBOARD] Waiting {wait_sec:.0f}s for next 5m boundary")
         next_wait_event_at = time.time() + 30.0
-        while wait_sec > 0 and state.running:
+        while wait_sec > 0 and state.running and state.run_id == run_id:
             time.sleep(min(1.0, wait_sec))
             wait_sec = max(target - time.time(), 0)
             now_wait = time.time()
@@ -555,9 +555,9 @@ def _engine_loop(symbols: list, is_crypto_map: dict):
                 })
                 next_wait_event_at = now_wait + 30.0
             
-        if not state.running:
+        if not state.running or state.run_id != run_id:
             return
-            
+
         state.push_event("system", {"msg": "Boundary reached — pipeline live"})
         print("[DASHBOARD] Boundary reached — starting live stream")
         _warmup_thread.join(timeout=30.0)
@@ -659,7 +659,7 @@ def _engine_loop(symbols: list, is_crypto_map: dict):
         _stream_thread = threading.Thread(target=_run_stream, daemon=True, name="mammon-stream")
         _stream_thread.start()
 
-        while state.running:
+        while state.running and state.run_id == run_id:
             if _stream_errors:
                 raise _stream_errors[0]
             time.sleep(0.5)
@@ -733,19 +733,43 @@ def _engine_loop(symbols: list, is_crypto_map: dict):
             state.last_exit_reason = _clip(exit_reason, 200)
             state.last_exit_detail = _clip(exit_detail, 800)
 
-            state.running = False
-            state.started_at = None
-            state.active_symbol = None
-            state.orchestrator = None
-            state.trigger = None
-            state.thalamus = None
-            state.thread = None
-            state.stop_requested = False
-            state.stop_requested_at = None
-            state.stop_source = ""
-            state.stop_reason = ""
-            state.stop_detail = ""
-            state.run_id = None
+            # Only reset live state if this thread still owns the engine.
+            # If a new engine was started before this finally block ran,
+            # its run_id will differ — don't clobber it.
+            is_current_owner = (state.run_id == run_id)
+            if is_current_owner:
+                state.running = False
+                state.started_at = None
+                state.active_symbol = None
+                state.orchestrator = None
+                state.trigger = None
+                state.thalamus = None
+                state.thread = None
+                state.stop_requested = False
+                state.stop_requested_at = None
+                state.stop_source = ""
+                state.stop_reason = ""
+                state.stop_detail = ""
+                state.run_id = None
+
+        # Only notify clients if this thread still owns the engine.
+        # A stale STOPPED event from a superseded thread would incorrectly
+        # disable the UI for the new running engine.
+        if not is_current_owner:
+            _write_engine_lifecycle_event(
+                "ENGINE_EXIT",
+                run_id=run_id,
+                mode=current_mode,
+                symbols=symbols,
+                exit_kind=exit_kind,
+                exit_source=exit_source,
+                exit_reason=exit_reason,
+                exit_detail=exit_detail,
+                duration_sec=state.last_run_duration_sec,
+                had_crash=bool(crash_exc),
+            )
+            print(f"[DASHBOARD] Superseded engine thread exited: run_id={run_id}, exit_kind={exit_kind}")
+            return
 
         state.push_event("engine", {
             "msg": f"Engine stopped ({exit_kind})",

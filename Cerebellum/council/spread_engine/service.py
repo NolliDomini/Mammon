@@ -25,14 +25,6 @@ class SpreadEngine:
             # Piece 46: Read bid/ask from ohlcv passthrough
             df = frame.market.ohlcv
             if df.empty or "bid" not in df.columns or "ask" not in df.columns:
-                # Piece 57: MNER COUNCIL-E-SPR-702
-                emit_mner(
-                    "COUNCIL-E-SPR-702",
-                    "SPREAD_ENGINE_MISSING_INPUTS",
-                    source="Cerebellum.council.spread_engine.service.SpreadEngine.evaluate",
-                    details={"reason": "missing_bid_ask_columns"},
-                    echo=True,
-                )
                 return self._apply_atr_fallback(frame, "missing_inputs")
 
             last_row = df.iloc[-1]

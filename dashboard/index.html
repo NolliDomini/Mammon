@@ -274,8 +274,8 @@
           <div class="pg-cell"><div class="k">Gear</div><div class="v">-</div></div>
           <div class="pg-cell"><div class="k">GK M.</div><div class="v">-</div></div>
           <div class="pg-cell"><div class="k">GK C.</div><div class="v">-</div></div>
-          <div class="pg-cell"><div class="k">Stop</div><div class="v">-</div></div>
-          <div class="pg-cell"><div class="k">BkEvn</div><div class="v">-</div></div>
+          <div class="pg-cell"><div class="k">BS Risk</div><div class="v">-</div></div>
+          <div class="pg-cell"><div class="k">Fitness</div><div class="v">-</div></div>
         </div>
       </div>
       <div class="pg-group weight-1">
@@ -625,8 +625,8 @@
           'Gear': p.active_gear,
           'GK M.': p.gatekeeper_min_monte,
           'GK C.': p.gatekeeper_min_council,
-          'Stop': p.stop_loss_mult,
-          'BkEvn': p.breakeven_mult,
+          'BS Risk': p.brain_stem_min_risk,
+          'Fitness': d.fitness_snapshot,
           // Monte
           'M Noise': p.monte_noise_scalar,
           'W Wrst': p.monte_w_worst,
@@ -779,6 +779,14 @@
       } catch (e) {
         addLog('State hydrate failed', 'error');
       }
+      // Hydrate brain frame from last known snapshot
+      try {
+        const fr = await fetch(`${API_BASE}/api/frame/latest`, { headers: authHeaders() });
+        if (fr.ok) {
+          const fd = await fr.json();
+          if (fd && fd.pulse_type) applyPulse(fd);
+        }
+      } catch (_) {}
     }
 
     function stopEngineOnWindowClose() {
@@ -807,6 +815,7 @@
       }
       initChart();
       await hydrateFromCurrentState();
+      refreshTreasury();
       if (stopOnCloseEnabled) {
         addLog('Auto-stop on tab close: ON');
         window.addEventListener('beforeunload', stopEngineOnWindowClose);

@@ -22,7 +22,7 @@ class PromotionThresholds:
     max_drawdown: float = 0.20
     min_stability: float = 0.55
     min_slippage_adj: float = 0.45
-    min_support: int = 100
+    min_support: int = 30
     max_drift: float = 0.25
     min_diversity: float = 0.0
 

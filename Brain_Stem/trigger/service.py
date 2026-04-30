@@ -428,7 +428,7 @@ class Trigger:
         # ---- LOGIC ----
         if self.position is None:
             # ENTRY LOGIC
-            min_risk = float(self.config.get("gatekeeper_min_monte", 0.5))
+            min_risk = float(self.config.get("brain_stem_min_risk", 0.65))
             is_safe = risk >= min_risk
             sigma = max(val_data.get("sigma", 0.0), 1e-9)
             entry_z = (price - val_data["mean"]) / sigma

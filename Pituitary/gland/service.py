@@ -166,7 +166,7 @@ class PituitaryGland:
 
         # 4. FIT GAUSSIAN PROCESS
         kernel = Matern(length_scale=np.ones(len(PARAM_KEYS)), nu=1.5)
-        gp = GaussianProcessRegressor(kernel=kernel, n_restarts_optimizer=3, alpha=1e-6)
+        gp = GaussianProcessRegressor(kernel=kernel, n_restarts_optimizer=3, alpha=1e-6, normalize_y=True)
         gp.fit(X_train, y_train)
 
         # 5. GENERATE CANDIDATES (500 bounded points)

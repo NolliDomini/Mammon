@@ -119,6 +119,7 @@ class BrainFrame:
         self.command.risk_used = 0.0
         self.command.cost_adjusted_conviction = 0.0
         self.command.final_confidence = 0.0
+        self.command.sizing_mult = 0.0
 
     def generate_machine_code(self) -> str:
         """

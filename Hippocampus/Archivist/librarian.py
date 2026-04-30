@@ -413,9 +413,14 @@ class MultiTransportLibrarian:
                 tail_mult DOUBLE,
                 confidence DOUBLE,
                 mode VARCHAR,
-                pulse_type VARCHAR
+                pulse_type VARCHAR,
+                atr_return DOUBLE
             );
         """)
+        try:
+            conn.execute("ALTER TABLE quantized_walk_mint ADD COLUMN IF NOT EXISTS atr_return DOUBLE")
+        except Exception:
+            pass
 
         # 2. Monte Mint (Survival Simulations)
         conn.execute("""

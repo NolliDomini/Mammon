@@ -47,7 +47,7 @@ class V2Budget:
     top_k: int = 6
     refine_lhs_n: int = 32
     bayes_n: int = 15
-    min_support: int = 25
+    min_support: int = 35
     diversity_floor: float = 0.05
     # Compatibility aliases used by legacy tests/spec docs.
     stage_c_n: int | None = None
@@ -204,12 +204,14 @@ class OptimizerV2Engine:
     def _stage_d_walk_context(self, regime_id: str, *, atr: float, mutations: List[float] | None) -> List[float]:
         stage = "stage_d_walk_context"
         self.guard.log_stage_start(stage, regime_id=regime_id)
-        if mutations:
+        min_needed = self.budget.min_support * 60
+        if mutations and len(mutations) >= min_needed:
             out = [float(x) for x in mutations]
         else:
-            # Deterministic fallback for environments without walk mutations yet.
-            sigma = max(float(atr) * 0.05, 1e-6)
-            out = self.rng.normal(0.0, sigma, size=self.budget.min_support * 60).tolist()
+            # Fallback: synthetic shocks in ATR units, N(0, 0.5).
+            # Represents ±0.5 ATR/step — typical intrabar market volatility.
+            # Stage E treats these as ATR-unit scalars and multiplies by noise_scalar * atr.
+            out = self.rng.normal(0.0, 0.5, size=min_needed).tolist()
         self.guard.log_stage_complete(stage, regime_id=regime_id, metrics={"mutation_count": len(out)})
         return out
 
@@ -232,7 +234,16 @@ class OptimizerV2Engine:
         n_paths = len(mutations) // n_steps
         if n_paths < self.budget.min_support:
             return []
-        shocks = np.array(mutations[: n_paths * n_steps]).reshape(n_paths, n_steps)
+        # Mutations are ATR-unit shocks: either real atr_return values from the walk silo
+        # (bar-over-bar price change / ATR) or synthetic N(0, 0.5) fallback from Stage D.
+        # We fit a N(regime_mu, regime_sigma) to the sample and generate paths from it,
+        # preserving the regime's observed drift and volatility in ATR-unit space.
+        sample = mutations[: n_paths * n_steps]
+        regime_mu = float(np.mean(sample))
+        regime_sigma = max(float(np.std(sample)), 0.5)  # Floor: half-ATR minimum spread
+        noise_seed = abs(hash(f"{regime_id}|{n_paths}|{n_steps}")) % (2**32)
+        noise_rng = np.random.default_rng(noise_seed)
+        shocks = noise_rng.normal(regime_mu, regime_sigma, (n_paths, n_steps))
 
         scores: List[Dict[str, Any]] = []
         for i, cand in enumerate(candidates):
@@ -240,16 +251,17 @@ class OptimizerV2Engine:
             noise_scalar = float(cand[1])
             stop_mult = float(cand[21])
 
-            scaled = price + np.cumsum(shocks * noise_scalar, axis=1)
+            atr_scaled = shocks * noise_scalar * atr
+            scaled = price + np.cumsum(atr_scaled, axis=1)
             min_reach = np.min(scaled[:, :gear], axis=1)
             stop_floor = price - (atr * stop_mult)
 
-            worst = np.mean((price + np.min(np.cumsum(shocks * noise_scalar * 2.0, axis=1)[:, :gear], axis=1)) > stop_floor)
+            worst = np.mean((price + np.min(np.cumsum(atr_scaled * 2.0, axis=1)[:, :gear], axis=1)) > stop_floor)
             neutral = np.mean(min_reach > stop_floor)
-            best = np.mean((price + np.min(np.cumsum(shocks * noise_scalar * 0.5, axis=1)[:, :gear], axis=1)) > stop_floor)
+            best = np.mean((price + np.min(np.cumsum(atr_scaled * 0.5, axis=1)[:, :gear], axis=1)) > stop_floor)
 
             stability = float(1.0 - np.std([worst, neutral, best]))
-            terminal = price + np.sum(shocks[:, :gear], axis=1)
+            terminal = price + np.sum(atr_scaled[:, :gear], axis=1)
             expectancy = float(np.mean(terminal - price) / (price * 0.01 + 1e-9))
             vec = ScoreVector(
                 expectancy=float(np.clip(0.5 + expectancy, 0, 1)),

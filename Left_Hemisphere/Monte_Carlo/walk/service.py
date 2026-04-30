@@ -34,6 +34,7 @@ class QuantizedGeometricWalk:
         self.librarian = librarian
         self.scribe = None # Lazy Init with context
         self.last_walk_event: Dict[str, Any] = {}
+        self._last_mint_price: Dict[str, float] = {}
 
     def calculate_regime_id(self, council_state: Dict[str, Any], price: float, atr: float) -> str:
         """Calculates the canonical regime ID from state."""
@@ -135,7 +136,18 @@ class QuantizedGeometricWalk:
             mutations=mutations
         )
 
-        self._mint_seed(seed, pulse_type)
+        # Compute ATR-normalized bar return for MINT pulses (actual market dynamics).
+        # atr_return = (price_now - price_prev_mint) / atr gives a dimensionless shock
+        # in ATR units that Stage E can use directly as Monte Carlo path increments.
+        atr_return = None
+        if pulse_type == "MINT" and atr > 0 and regime_id in self._last_mint_price:
+            prev = self._last_mint_price[regime_id]
+            if prev > 0:
+                atr_return = (price - prev) / atr
+        if pulse_type == "MINT" and price > 0:
+            self._last_mint_price[regime_id] = price
+
+        self._mint_seed(seed, pulse_type, atr_return=atr_return)
         if frame is not None and hasattr(frame, "risk"):
             frame.risk.mu = seed.mu
             frame.risk.sigma = seed.sigma
@@ -158,18 +170,18 @@ class QuantizedGeometricWalk:
         }
         return seed
 
-    def _mint_seed(self, seed: WalkSeed, pulse_type: str):
+    def _mint_seed(self, seed: WalkSeed, pulse_type: str, atr_return: float = None):
         ts = datetime.now(timezone.utc).isoformat()
         try:
             self.librarian.write("""
                 INSERT INTO quantized_walk_mint (
                     ts, symbol, mode, regime_id, mu, sigma, p_jump, jump_mu, jump_sigma,
-                    tail_mult, confidence, pulse_type
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    tail_mult, confidence, pulse_type, atr_return
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 ts, None, seed.mode, seed.regime_id, seed.mu, seed.sigma,
                 seed.p_jump, seed.jump_mu, seed.jump_sigma, seed.tail_mult,
-                seed.confidence, pulse_type,
+                seed.confidence, pulse_type, atr_return,
             ), transport="duckdb")
         except Exception:
             pass
