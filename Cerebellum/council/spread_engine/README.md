@@ -1,28 +1,35 @@
-# SpreadEngine Change Log (v3.0)
+# Cerebellum/council/spread_engine — SpreadEngine
 
-## [2026-02-28]
-### Phase 1: Execution Friction
-- **Piece 43**: Created `Cerebellum/council/spread_engine/__init__.py` to initialize the spread indicator module.
-- **Piece 44**: Created `service.py` with the `SpreadEngine` class implementing the standard `evaluate(pulse_type, frame)` contract.
-- **Piece 45**: Implemented a pulse gate to restrict evaluation to `SEED` and `ACTION` pulses, ensuring zero overhead on `MINT`.
-- **Piece 46**: Implemented `bid`/`ask` extraction logic from `frame.market.ohlcv` passthrough columns with fallback to `close`.
-- **Piece 47**: Added `_raw_spread_bps` helper for high-precision basis point spread calculation.
-- **Piece 48**: Implemented strict validation for bid/ask consistency with MNER `COUNCIL-E-P48-301` for data integrity failures.
-- **Piece 49**: Implemented ATR-based fallback calculation (`atr_bps * spread_atr_ratio`) for scenarios with missing or invalid real-time quotes.
-- **Piece 50**: Implemented `_calculate_score` using a distance-from-ATR model to normalize liquidity friction into a 0.0-1.0 confidence score.
-- **Piece 51**: Implemented `_calculate_regime` to categorize liquidity conditions (TIGHT, NORMAL, WIDE, STRESSED) based on Gold thresholds.
-- **Piece 52**: Established "Diagnostic-Only" policy for the spread engine; it provides rich telemetry but does not inhibit pulse authorization.
-- **Piece 53**: Integrated `evaluate()` outputs directly into `BrainFrame.environment` slots for downstream lobe consumption.
-- **Piece 125**: Implemented neutral-score guard (`spread_score = 0.0`) for all runtime and logic failure paths.
-- **Piece 125**: Verified neutral-score guard (`spread_score = 0.0`) for runtime failure paths, ensuring robust Council synthesis.
-- **Piece 56**: Explicitly mapped `COUNCIL-E-SPR-701` for invalid bid/ask quote detection.
-- **Piece 57**: Explicitly mapped `COUNCIL-E-SPR-702` for missing input columns, triggering automatic ATR fallback.
-- **Piece 58**: Implemented `COUNCIL-E-SPR-703` for spread-to-confidence normalization failures.
-- **Piece 59**: Implemented top-level MNER `COUNCIL-E-SPR-704` for unexpected `evaluate()` runtime exceptions.
-- **Piece 60**: Verified happy-path spread logic (bps, score, regime) via unit tests in `Hippocampus/tests_v2/contracts/test_spread_engine_contract.py`.
-- **Piece 61**: Verified invalid quote detection (`bid <= 0`, `ask < bid`) and MNER `COUNCIL-E-SPR-701` triggering ATR fallback in unit tests.
-- **Piece 62**: Verified missing column handling and MNER `COUNCIL-E-SPR-702` triggering ATR fallback in unit tests.
-- **Piece 63**: Verified regime boundary transitions (TIGHT, NORMAL, WIDE, STRESSED) in unit tests.
-- **Piece 66**: Verified pulse gating logic correctly skips `MINT` pulses in unit tests.
+Evaluates bid/ask friction and writes a normalized spread score to BrainFrame each SEED and ACTION pulse.
 
+## Role
 
+The 5th Council indicator. Runs before ATR/ADX/VWAP so its score can feed the `vol` slot in Council's weighted blend. If live bid/ask are unavailable or invalid, falls back to an ATR-proportional estimate.
+
+## What It Does
+
+- **Pulse gate**: skips MINT pulses entirely
+- **Live path**: reads `bid`/`ask` from `frame.market.ohlcv`, computes spread in basis points, normalizes against ATR
+- **ATR fallback**: when bid/ask are missing or invalid, estimates spread as `(ATR / close) × 10000 × spread_atr_ratio`
+- **Score**: `1.0 − clamp(spread_bps / (atr_bps × scalar), 0, 1)` — higher is better (tighter spread)
+- **Regime**: bins spread into TIGHT / NORMAL / WIDE / STRESSED using configurable bps thresholds
+- Emits `COUNCIL-E-SPR-701` MNER only for invalid quotes (bid ≤ 0 or ask < bid); missing inputs use ATR fallback silently
+
+## BrainFrame I/O
+
+- **Reads:** `frame.market.ohlcv` (bid, ask, close), `frame.environment.atr`, `frame.standards`
+- **Writes:** `frame.environment.bid_ask_bps`, `frame.environment.spread_score`, `frame.environment.spread_regime`, `frame.environment.spread_inputs`
+
+## Key Config
+
+| Param | Default | Purpose |
+|---|---|---|
+| `spread_atr_ratio` | 0.10 | ATR fraction used for fallback spread estimate |
+| `spread_score_scalar` | 1.0 | Scales ATR denominator in score formula |
+| `spread_tight_threshold_bps` | 5.0 | TIGHT regime ceiling |
+| `spread_normal_threshold_bps` | 15.0 | NORMAL regime ceiling |
+| `spread_wide_threshold_bps` | 50.0 | WIDE regime ceiling |
+
+## Files
+
+- `service.py` — `SpreadEngine`; evaluate(), ATR fallback, score + regime calculation

@@ -1,21 +1,23 @@
-# ⚙️ Cerebellum & Soul
-### *The System Governor*
+# Cerebellum — System Governor
 
-**Role**: The Cadence Authority and Environmental Intelligence Center.
+The cadence authority and environmental intelligence center; contains Soul (orchestrator) and Council (environment scoring).
 
-## Ownership
-The Cerebellum acts as the central orchestrator (Soul) and the environment evaluator (Council).
+## Role
 
-*   **Soul Orchestration**: Enforces the deterministic Triple-Pulse rhythm (`SEED`, `ACTION`, `MINT`) and strict execution order of all downstream lobes.
-*   **BrainFrame**: Owns the zero-copy single source of truth data container. The entire state of a pulse is managed here.
-*   **Pulse Gating**: Routes `MINT` pulses directly to Brain Stem for execution. Timing-based kill windows have been removed — the sole entry guard between `ACTION` and `MINT` is the Brain Stem's stddev valuation gate (z-score), which was already computed and baked into the Council score before `ACTION` armed the intent.
-*   **Council (Environment)**: Computes the environment confidence score based on ATR (Volatility), ADX (Trend), Volume, and VWAP distance.
+Cerebellum owns the pulse lifecycle. `Soul/orchestrator` drives every lobe in deterministic order each SEED/ACTION/MINT pulse. `Council` synthesizes ATR, ADX, VWAP, and spread into a single environmental confidence score and a 16-character regime ID.
 
-## Anti-Ownership (What it does NOT do)
-*   Does **not** execute broker orders (Brain Stem).
-*   Does **not** evaluate technical breakouts (Right Hemisphere) or risk simulations (Left Hemisphere).
-*   Does **not** manage money ledgers (Medulla).
+## What It Does
 
-## Core Invariants
-*   No module outside Soul may author runtime pulse transitions.
-*   All downstream lobes must use `enforce_pulse_gate()` to reject stale or out-of-sequence pulses.
+- `Orchestrator` registers lobes, calls them in sequence, catches deadline violations, publishes BrainFrame snapshots to Redis
+- `Council` runs four indicators (ATR ratio, ADX trend, spread score, VWAP distance) and blends them into `frame.environment.confidence`
+- Council generates a `D_A_V_T` regime ID (4 binned dimensions) written to `frame.risk.regime_id`
+- Hot-vault reload: on every MINT, Soul checks if the Gold param ID changed and pushes new params to all lobes
+- `SpreadEngine` (sub-module) evaluates bid/ask friction each SEED and ACTION pulse
+
+## Files
+
+- `Soul/orchestrator/service.py` — `Orchestrator`; pulse loop, lobe registry, vault reload
+- `Soul/brain_frame/service.py` — `BrainFrame`; zero-copy shared state
+- `Soul/utils/` — timing helpers, ward manager
+- `council/service.py` — `Council`; environmental indicator synthesis
+- `council/spread_engine/service.py` — `SpreadEngine`; bid/ask spread evaluation

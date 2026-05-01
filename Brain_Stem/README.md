@@ -1,39 +1,39 @@
-# 🏹 Brain Stem
-### *The Execution Edge*
+# Brain_Stem — Trigger
 
-**Role**: The final bridge to the physical broker.
+Final execution layer: arms trades at ACTION and fires physical orders at MINT.
 
-## Ownership
-The Brain Stem is responsible for translating system intent into market action.
+## Role
 
-*   **Trigger Protocol**: Converts approved `BrainFrame` intents into actionable broker orders.
-*   **The Three-Gate Entry Protocol**: Enforces final safety checks before execution:
-    * Risk gate: `risk >= gatekeeper_min_monte`
-    * Valuation cap: entry z-score must be `<= brain_stem_entry_max_z`
-    * Conviction gate: prior confidence must pass baseline threshold
-*   **Deferred Execution**: Arms intents on the `ACTION` pulse and fires them unconditionally on the subsequent `MINT` pulse. The `MEAN_DEV_CANCEL` gate between `ACTION` and `MINT` has been removed — the Council already embeds stddev context before `ACTION` fires, making the inter-pulse z-score check redundant.
-*   **Safety Valves**: Automates exit logic (Stop Loss `mean - 1.5σ`, Take Profit `mean + 2.0σ`, Mean Reversion rollover). On every HOLD pulse, `mark_to_market()` is called to keep unrealized P&L live in the treasury.
-*   **SELL Closes Position**: Exit triggers now call `treasury.fire_intent(..., "SELL")` to crystallize realized P&L and zero the position in the ledger.
-*   **Adapter Routing**: Dynamically switches between mock/paper adapters and real Alpaca live execution based on system mode.
+Runs at ACTION and MINT pulses only. On ACTION, passes three gates (Risk Monte, Valuation Z-cap, Prior conviction) and arms a `pending_entry`. On MINT, either fires the order or cancels it (stale price guard, mean-deviation kill-switch). Manages exit logic (stop / take-profit bands) for open positions.
 
-## Current Runtime Defaults (2026-04-19)
-The active scalper profile in Gold (`scalp_v1_20260419`) is tuned for faster decision cadence:
-*   `active_gear = 3`
-*   `gatekeeper_min_monte = 0.30`
-*   `gatekeeper_min_council = 0.44`
-*   `brain_stem_entry_max_z = 0.8`
+## What It Does
 
-Guardrails are still enforced at Brain Stem/Treasury level:
-*   `max_notional_per_order`
-*   `max_open_positions`
-*   `max_daily_realized_loss`
+- **Gate 1 — Risk**: 1k-path Monte Carlo on current price; must exceed `brain_stem_min_risk` (default 0.65)
+- **Gate 2 — Valuation**: 10k-path stddev simulation; entry z-score must be ≤ `brain_stem_entry_max_z` (default 0.8)
+- **Gate 3 — Prior**: blended conviction `(monte_score × w_turtle) + (council × w_council)` must exceed 0.5
+- **ACTION arm**: records `intent_id` in `money_orders` via TreasuryGland; sets `pending_entry`
+- **MINT fire**: checks stale-price and mean-deviation guards, then calls `_fire_physical()` → Alpaca or mock
+- **Exit**: compares price against entry bands (`lower = mean − 1.5σ`, `upper = mean + 2σ`); calls SELL when hit
+- Recovers open position from TreasuryGland on engine restart
 
-## Anti-Ownership (What it does NOT do)
-*   Does **not** calculate alpha or structural signals.
-*   Does **not** make final system policy/approval decisions (Medulla).
-*   Does **not** handle internal accounting or PnL ledgers (Medulla).
+## BrainFrame I/O
 
-## Core Invariants
-*   Must never execute an order that was not explicitly armed during the preceding `ACTION` pulse.
-*   Must call `mark_to_market()` on every HOLD pulse to keep unrealized P&L current.
-*   Must call `treasury.fire_intent(..., "SELL")` on every exit to close the position in the ledger.
+- **Reads:** `frame.structure.price`, `frame.structure.active_lo`, `frame.environment.atr`, `frame.environment.confidence`, `frame.risk.monte_score`, `frame.command.sizing_mult`, `frame.command.ready_to_fire`, `frame.command.approved`
+- **Writes:** `frame.risk.monte_score` (risk gate result), `frame.valuation.*` (mean, sigma, bands, z_distance)
+
+## Key Config
+
+| Param | Default | Purpose |
+|---|---|---|
+| `brain_stem_min_risk` | 0.65 | Risk gate floor (independent of Gatekeeper) |
+| `brain_stem_entry_max_z` | 0.8 | Max z-score above fair value to enter |
+| `brain_stem_stale_price_cancel_bps` | 25.0 | Cancel if price moves this many bps between ARM and FIRE |
+| `brain_stem_sigma` | 0.10 | Noise scalar for both Monte runs |
+| `brain_stem_bias` | 0.05 | Conviction bias injected into simulations |
+| `brain_stem_w_turtle` | 0.5 | Weight on monte_score for Prior |
+| `brain_stem_w_council` | 0.5 | Weight on council confidence for Prior |
+
+## Files
+
+- `trigger/service.py` — `Trigger` class; full ARM/FIRE/EXIT/HOLD logic
+- `pons_execution_cost/service.py` — `PonsExecutionCost`; estimates slippage + fee in bps before sizing

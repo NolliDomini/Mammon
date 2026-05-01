@@ -1,41 +1,24 @@
-# Optical Tract
+# Corpus/Optical_Tract — OpticalTract
 
-## Purpose
-Optical Tract is a lightweight broadcast bus for pulse dataframes.
+Synchronous pulse fan-out bus: broadcasts each OHLCV DataFrame to all registered lobes.
 
-Primary runtime file:
-- `Corpus/Optical_Tract/spray.py`
+## Role
 
-## Contract
-Publisher-side:
-- caller invokes `spray(data: pd.DataFrame)`
+Thalamus calls `spray(df)` after building a pulse DataFrame. OpticalTract iterates its subscriber list and calls `on_data_received(df)` on each. The Orchestrator subscribes to OpticalTract so data flows Thalamus → OpticalTract → Orchestrator → lobes without double-ingestion.
 
-Subscriber-side:
-- each subscriber must implement `on_data_received(data)`
+## What It Does
 
-Current behavior:
-- broadcasts payload to all subscribers in registration order
-- does not transform payload
-- returns structured delivery telemetry (`subscriber_count`, `delivered_count`, `failed_count`, `errors`)
-- delivery policy is synchronous with a 50ms soft budget per spray cycle (tracked in telemetry, not hard-kill enforced)
+- `subscribe(lobe)` registers any object with `on_data_received`; deduplicates re-subscriptions
+- `spray(df)` delivers to all subscribers synchronously; per-subscriber exceptions are caught and counted without blocking other deliveries
+- Tracks delivery timing per-subscriber via `delivery_stats` numpy array
+- Publishes delivery summary (count, failures, total time) to Redis via Librarian
 
-## Legacy Compatibility
-Some legacy subscribers use:
-- `on_data_received(pulse_type, data)`
+## BrainFrame I/O
 
-Use explicit adapter:
-- `Corpus.Optical_Tract.adapters.LegacyTwoArgSubscriberAdapter`
+- **Reads:** raw pulse DataFrame (before it enters BrainFrame)
+- **Writes:** nothing directly — triggers Orchestrator which owns BrainFrame
 
-Transport no longer guesses signatures at runtime.
+## Files
 
-## Operational Invariants
-- no silent mutation of input dataframe
-- failures in one subscriber do not stop fan-out to other subscribers
-- subscriber registration should be explicit and observable
-- latency impact is observable via `total_delivery_ms` and `max_subscriber_ms`
-
-## Testing Expectations
-Minimum coverage:
-- subscriber registration
-- delivery fan-out to multiple subscribers
-- error visibility when a subscriber has incompatible signature
+- `spray.py` — `OpticalTract`; subscribe/unsubscribe/spray
+- `adapters.py` — format adapters for DataFrame normalization

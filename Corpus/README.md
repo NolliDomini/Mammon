@@ -1,19 +1,19 @@
-# 🌉 Corpus
-### *The Neural Bridge*
+# Corpus — Neural Bridge
 
-**Role**: The transport and synthesis layer between the hemispheres and the core.
+Transport and synthesis layer: OpticalTract fans OHLCV data to all subscribers; Callosum blends Left and Right hemisphere signals into a final tier_score.
 
-## Ownership
-The Corpus acts as the integration bus and scoring synthesizer.
+## Role
 
-*   **Callosum (Deterministic Tier Synthesis)**: The authority for blending risk (Left) and structure (Right) signals. Computes the composite `tier_score` and writes it to the `BrainFrame`.
-*   **Optical Tract (Broadcast Substrate)**: A synchronous Observer-pattern bus. Performs high-speed fan-out (`spray(df)`) of pulse data to all registered system subscribers.
-*   **Fault-Tolerant Delivery**: Captures subscriber failures in telemetry without aborting the global broadcast cycle.
+Two distinct responsibilities: `OpticalTract` is a synchronous broadcast bus that delivers each pulse DataFrame to every registered subscriber (lobes with `on_data_received`). `Callosum` is a deterministic blending function that merges `monte_score` (Left) and `tier1_signal` (Right) into `frame.risk.tier_score` during ACTION pulses.
 
-## Anti-Ownership (What it does NOT do)
-*   Does **not** generate original technical signals or risk probabilities.
-*   Does **not** handle final policy approval or broker execution.
+## What It Does
 
-## Core Invariants
-*   Must adhere to a strict soft-latency budget (e.g., 50ms) for internal payload fan-out.
-*   Must isolate subscriber failures to prevent cascading system collapse.
+- `OpticalTract.spray()` iterates subscribers in registration order, calls `on_data_received(df)`, catches exceptions per-subscriber so one failure doesn't block others
+- `Callosum.score_tier()` computes `tier_score = clamp((monte × w_monte) + (tier1_signal × w_right), 0, 1)` and writes to `frame.risk.tier_score`
+- Callosum logs every score to `callosum_mint` table for audit
+- OpticalTract tracks per-subscriber delivery stats
+
+## Files
+
+- `callosum/service.py` — `Callosum`; `score_tier()` synthesis + `callosum_mint` logging
+- `Optical_Tract/spray.py` — `OpticalTract`; subscribe/unsubscribe/spray broadcast bus

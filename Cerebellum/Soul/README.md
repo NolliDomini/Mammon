@@ -1,77 +1,35 @@
-# Soul
+# Cerebellum/Soul — Orchestrator
 
-## Purpose
-Soul is Mammon's orchestration authority.
+Drives the entire engine pulse-by-pulse; owns the BrainFrame lifecycle and lobe dispatch order.
 
-It owns:
-- pulse-cycle sequencing across lobes
-- pulse cadence authority (`SEED`/`ACTION`/`MINT`) via incoming pulse materials
-- shared BrainFrame lifecycle per pulse
-- timing/deadline telemetry for lobe execution
-- runtime trade-gate wiring into execution path
-- hormonal parameter injection at lobe registration
+## Role
 
-It does not own:
-- raw market ingestion source authority (Thalamus)
-- final policy thresholds (Medulla Gatekeeper)
-- broker order adapter logic (Brain Stem)
+Soul is invoked by the dashboard thread every 5-minute bar. It subscribes to OpticalTract for push-based data delivery and calls `_process_frame()` which runs all lobes in sequence. Soul also manages vault hot-reload, Amygdala persistence, Pineal melatonin, Pituitary growth hormone, and the ParamCrawler on every MINT.
 
-Primary runtime file:
-- `Cerebellum/Soul/orchestrator.py`
+## What It Does
 
-## Runtime Contract
-Primary class:
-- `Orchestrator`
+- Initializes BrainFrame and mirrors Gold params to `frame.standards` on startup
+- Calls `reset_pulse()` at the start of each pulse to clear ephemeral state
+- Dispatches lobes in fixed order: Right_Hemisphere → Council → PonsExecutionCost → Left_Hemisphere → VolumeFurnace → (if tier1_signal) Gatekeeper → AllocationGland → Brain_Stem
+- On MINT: always calls Brain_Stem (to execute any pending ACTION entry), then Amygdala, Pineal, vault check, Pituitary, Crawler
+- Pre-computes Brain_Stem valuation before AllocationGland so `z_distance` is available for sizing
+- Publishes serialized BrainFrame JSON to Redis key `mammon:brain_frame:{symbol}` after every pulse
 
-Core entrypoints:
-- `register_lobe(name, instance)`
-- `pulse(symbols, is_crypto=True, data_override=None)`
-- `on_data_received(data)` (Optical Tract subscriber hook)
+## BrainFrame I/O
 
-Core cycle in `_process_frame(...)`:
-1. reset/populate shared `BrainFrame`
-2. run right hemisphere structure step
-3. run council environment step
-4. run left hemisphere readiness/seed path
-5. run optimizer cadence hook (Volume Furnace)
-6. run corpus + gatekeeper + brain stem when signal conditions are met
-7. mint runtime synapse ticket through Amygdala
-8. run Pineal/Pituitary maintenance hooks
+- **Reads:** entire frame (master coordinator)
+- **Writes:** `frame.market.*` (symbol, mode, ts, ohlcv), `frame.standards` (Gold params), `frame.command.approved/ready_to_fire` (trade gate inhibit)
 
-## Pulse and Trade Gate Behavior
-- Pulse type is read from incoming data (`pulse_type` column).
-- Soul assigns and enforces cycle cadence; Thalamus does not author policy/legality for pulses.
-- Runtime trade gate is provided by `config["trading_enabled_provider"]`.
-- Evaluation of trade-gate/mode legality happens at the Soul boundary (start of `_process_frame`).
-- If trade gate is false, Soul inhibits fire even when upstream scores are green.
-- **Timing Guard (Piece 16):** Soul enforces a 30-second wall-clock ACTION->MINT expiry. Late MINTs trigger a `TIMING_CANCEL` inhibiting execution.
-- Brain Stem MINT finalization path is still executed for deferred ACTION lifecycle closure or cancellation.
+## Key Config
 
-## Parameter Governance
-- Soul loads Gold from `Hippocampus/hormonal_vault.json` at init.
-- **Hot-Reload (Piece 14):** Soul checks for vault mutations on every MINT pulse and hot-reloads all lobe parameters if a new standard is coronated.
-- On `register_lobe` (and hot-reload), Gold params are injected into lobe configs.
-- Left hemisphere receives explicit noise/lane-weight injections for runtime consistency.
-- Gatekeeper and Brain Stem consume those injected Gold params during live decisions.
+- `execution_mode` — DRY_RUN / PAPER / LIVE / BACKTEST
+- `trading_enabled_provider` — callable returning bool (fornix/warmup gate)
+- `synapse_persist_pulse_types` — which pulses Amygdala writes (default: MINT only)
+- `deadlines` — per-lobe timing budgets (seconds)
 
-## Furnace Boundary
-- Furnace execution is part of cadence and telemetry, not direct trade authorization.
-- Trade approval remains `Gatekeeper.decide(...)`; trade arm/fire lifecycle remains Brain Stem + Treasury.
-- Furnace outcomes can influence trading only after a Gold mutation is written to vault and Soul hot-reloads.
+## Files
 
-## Operational Invariants
-- One shared `BrainFrame` is the source of truth inside the cycle.
-- Lobe order is deterministic for dependency correctness.
-- Cycle exceptions should be contained and logged with lobe context.
-- Timing metrics must be appended to pulse log for observability.
-
-## Known Drift and Risks
-- none identified (timing guards and trade-gate centralization resolved 2026-02-20)
-
-## Testing Expectations
-Minimum coverage:
-- lobe order and frame mutation flow
-- trade-gate inhibition behavior
-- ACTION->MINT deferred execution flow via Brain Stem
-- deadline metric capture
-- failure containment per-lobe
+- `orchestrator/service.py` — `Orchestrator`; full pulse loop
+- `brain_frame/service.py` — `BrainFrame`; zero-copy shared state dataclass
+- `utils/ward_manager.py` — cleans up stale ward state on boot
+- `utils/timing.py` — `enforce_pulse_gate` helper
