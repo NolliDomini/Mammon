@@ -361,7 +361,7 @@ class MultiTransportLibrarian:
                 # Avoid hard import-time failures when the shared file is locked.
                 fallback = self.root_path / "runtime" / ".tmp_test_local"
                 fallback.mkdir(parents=True, exist_ok=True)
-                alt = fallback / f"ecosystem_params_{uuid.uuid4().hex}.duckdb"
+                alt = fallback / "ecosystem_params_stable.duckdb"
                 self._param_conn = duckdb.connect(database=str(alt))
         return self._param_conn
 
@@ -905,8 +905,8 @@ class MultiTransportLibrarian:
                 # Piece 162: Robust fallback for locked files or permission issues
                 fallback = self.root_path / "runtime" / ".tmp_test_local"
                 fallback.mkdir(parents=True, exist_ok=True)
-                alt = fallback / f"ecosystem_synapse_{uuid.uuid4().hex}.duckdb"
-                print(f"   [LIBRARIAN_WARN] Primary DuckDB locked or failed ({e}). Using volatile fallback: {alt}")
+                alt = fallback / "ecosystem_synapse_stable.duckdb"
+                print(f"   [LIBRARIAN_WARN] Primary DuckDB locked or failed ({e}). Using stable fallback: {alt}")
                 self._duck_conn = duckdb.connect(database=str(alt), read_only=False)
         return self._duck_conn
 
