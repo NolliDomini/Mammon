@@ -603,6 +603,7 @@ def _engine_loop(symbols: list, is_crypto_map: dict):
     crash_traceback = ""
     run_id = "unknown"
     current_mode = "DRY_RUN"
+    furnace = None  # populated after orchestrator init; referenced in finally for shutdown
     try:
         from Thalamus.relay.service import Thalamus
         from Cerebellum.Soul.orchestrator.service import Orchestrator
@@ -929,6 +930,14 @@ def _engine_loop(symbols: list, is_crypto_map: dict):
         print(f"[DASHBOARD] Engine crash: {e}")
         print(crash_traceback)
     finally:
+        # Shut down the furnace worker thread before touching state.
+        # furnace is a local var captured at engine-start; safe to call without the lock.
+        if furnace is not None and hasattr(furnace, "shutdown"):
+            try:
+                furnace.shutdown()
+            except Exception:
+                pass
+
         now_ts = time.time()
         with state.lock:
             stop_requested = state.stop_requested
@@ -1046,18 +1055,22 @@ def _kill_thread(t: threading.Thread) -> None:
 
 
 def _stop_engine_only(source: str, reason: str, detail: str = "") -> None:
-    """Kill the engine thread. Fornix is unaffected."""
+    """Signal the engine thread to stop cleanly. Fornix is unaffected.
+
+    Sets state.running=False so the boundary loop exits within 0.5s, then the
+    engine thread's own finally block runs cleanup (stop_stream, furnace.shutdown,
+    state reset). Stopping the asyncio loop unblocks the WebSocket stream so the
+    stream thread can exit and be joined by the engine thread's cleanup code.
+    """
     with state.lock:
         if state.running:
             state.request_stop(source=source, reason=reason, detail=detail)
         loop = state._stream_loop
-        engine_thread = state.thread
     if loop is not None and not loop.is_closed():
         try:
             loop.call_soon_threadsafe(loop.stop)
         except Exception:
             pass
-    _kill_thread(engine_thread)
 
 
 def _stop_fornix_only() -> None:
