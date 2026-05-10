@@ -38,9 +38,11 @@ from Right_Hemisphere.Snapping_Turtle.engine import SnappingTurtle
 from Left_Hemisphere.Monte_Carlo.turtle_monte import TurtleMonte
 from Corpus.callosum import Callosum
 from Medulla.gatekeeper import Gatekeeper
+from Medulla.allocation_gland.service import AllocationGland
+from Brain_Stem.pons_execution_cost.service import PonsExecutionCost
 from Hippocampus.pineal import Pineal
 from Pituitary.diamond_deep_search import DiamondGland
-from Brain_Stem.connection import Trigger
+from Brain_Stem.trigger import Trigger
 
 
 # ------------------------------------------------------------------ #
@@ -78,13 +80,14 @@ class Fornix:
     """
     
     def __init__(self, test_pulse: Dict[str, Any] = None, db_path: str = None,
-                 progress_callback=None):
+                 progress_callback=None, trade_callback=None):
         self.config = test_pulse or TEST_PULSE_25
         self.pond = DuckPond(db_path=db_path)
         self.pineal = Pineal()
         self.start_time = None
         self.run_id = f"fornix-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
-        self.progress_callback = progress_callback  # Dashboard hook
+        self.progress_callback = progress_callback
+        self.trade_callback = trade_callback  # fires per MINT fire: (symbol, price, qty, trade_num)
         
         # Metrics
         self.total_bars_processed = 0
@@ -109,44 +112,47 @@ class Fornix:
     # ------------------------------------------------------------------ #
     def run(self, symbols: List[str] = None, resume: bool = True):
         """
-        Main entry point. Replays all symbols (or specified subset) through 
+        Main entry point. Replays all symbols (or specified subset) through
         the engine, minting synapse tickets.
         """
         self.start_time = time.time()
-        
-        available = self.pond.get_symbol_list()
-        if not available:
-            print("[FORNIX] ERROR: No symbols in market_tape. Ingest CSVs first.")
-            return
-        
-        targets = symbols if symbols else available
-        targets = [s for s in targets if s in available]
-        
-        total_bars = sum(self.pond.get_bar_count(s) for s in targets)
-        print(f"[FORNIX] Targets: {len(targets)} symbols, {total_bars:,} total bars")
-        print(f"[FORNIX] Symbols: {', '.join(targets)}")
-        print()
-        
-        for idx, symbol in enumerate(targets):
-            if self.shutdown_requested:
-                print(f"\n[FORNIX] SHUTDOWN REQUESTED. Stopping at {idx}/{len(targets)} symbols.")
-                break
 
-            if self._time_exceeded():
-                print(f"\n[FORNIX] TIME LIMIT ({self.config['max_hours']}h) reached. "
-                      f"Stopping after {idx}/{len(targets)} symbols.")
-                break
-            
-            self._process_symbol(symbol, idx + 1, len(targets), resume=resume)
-        
-        # Run Diamond deep search on the accumulated historical data
-        consumed_by_diamond = self._run_diamond()
-        
-        # Archive staged brainframes, then wipe only if Diamond consumed them.
-        self._finalize_synapse_staging(consumed_by_diamond)
-        
-        # Final report
-        self._print_report()
+        try:
+            available = self.pond.get_symbol_list()
+            if not available:
+                print("[FORNIX] ERROR: No symbols in market_tape. Ingest CSVs first.")
+                return
+
+            targets = symbols if symbols else available
+            targets = [s for s in targets if s in available]
+
+            total_bars = sum(self.pond.get_bar_count(s) for s in targets)
+            print(f"[FORNIX] Targets: {len(targets)} symbols, {total_bars:,} total bars")
+            print(f"[FORNIX] Symbols: {', '.join(targets)}")
+            print()
+
+            for idx, symbol in enumerate(targets):
+                if self.shutdown_requested:
+                    print(f"\n[FORNIX] SHUTDOWN REQUESTED. Stopping at {idx}/{len(targets)} symbols.")
+                    break
+
+                if self._time_exceeded():
+                    print(f"\n[FORNIX] TIME LIMIT ({self.config['max_hours']}h) reached. "
+                          f"Stopping after {idx}/{len(targets)} symbols.")
+                    break
+
+                self._process_symbol(symbol, idx + 1, len(targets), resume=resume)
+
+            # Run Diamond deep search on the accumulated historical data
+            consumed_by_diamond = self._run_diamond()
+
+            # Archive staged brainframes, then wipe only if Diamond consumed them.
+            self._finalize_synapse_staging(consumed_by_diamond)
+
+            # Final report
+            self._print_report()
+        finally:
+            self.pond.close()
     
     # ------------------------------------------------------------------ #
     #  SYMBOL PROCESSING                                                  #
@@ -225,18 +231,18 @@ class Fornix:
             
             sym_bars += (chunk_end - chunk_start)
             last_ts = str(chunk.index[-1])
-            
+
             # Flush ticket buffer
             if len(ticket_buffer) >= 100:
                 self.pond.write_synapse_batch(ticket_buffer)
                 ticket_buffer = []
-            
+
             # Checkpoint
             if sym_mints % self.config["checkpoint_interval"] == 0 and sym_mints > 0:
                 self.pond.save_checkpoint(symbol, last_ts, sym_bars, sym_mints)
-            
-            # Progress report every 10 chunks
-            if (chunk_start // chunk_size) % 10 == 0 and chunk_start > 0:
+
+            # Progress report every 1000 bars
+            if sym_bars % 1000 == 0 and sym_bars > 0:
                 elapsed = time.time() - sym_start
                 rate = sym_bars / max(elapsed, 0.01)
                 remaining = (bar_count - (chunk_start + chunk_size)) / max(rate, 1)
@@ -298,7 +304,7 @@ class Fornix:
         })
 
         # Replay input source and canonical orchestrator authority.
-        gland = SmartGland(window_minutes=5, context_size=50)
+        gland = SmartGland(window_minutes=5, context_size=200)
         soul = Orchestrator(config={"execution_mode": "BACKTEST"})
 
         turtle = SnappingTurtle(config=config)
@@ -327,6 +333,8 @@ class Fornix:
         soul.register_lobe("Left_Hemisphere", monte)
         soul.register_lobe("Corpus", callosum)
         soul.register_lobe("Gatekeeper", gatekeeper)
+        soul.register_lobe("PonsExecutionCost", PonsExecutionCost())
+        soul.register_lobe("AllocationGland", AllocationGland())
         soul.register_lobe("Brain_Stem", trigger)
         soul.set_execution_mode("BACKTEST")
 
@@ -355,6 +363,16 @@ class Fornix:
             if pulse_type == "MINT":
                 if soul.frame.command.ready_to_fire:
                     self.total_trades += 1
+                    if self.trade_callback:
+                        try:
+                            self.trade_callback(
+                                symbol=symbol,
+                                price=float(soul.frame.structure.price or 0),
+                                qty=float(soul.frame.command.sizing_mult or 0),
+                                trade_num=self.total_trades,
+                            )
+                        except Exception:
+                            pass
                 return soul.frame.to_synapse_dict()
         except Exception as e:
             print(f"  [FORNIX_ERROR] pulse={pulse_type} symbol={symbol} error={e}")

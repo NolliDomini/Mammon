@@ -42,9 +42,14 @@ class AllocationGland:
             z_distance = frame.valuation.z_distance
             
             # Piece 97: Raw Conviction
-            # formula: clamp(z_distance / max_z, 0.0, 1.0)
             max_z = frame.standards.get("alloc_max_z", frame.standards.get("max_z", 2.0))
-            raw_conviction = np.clip(z_distance / max_z, 0.0, 1.0)
+            if z_distance > 0:
+                # Below mean — conviction scales with how far price is from fair value
+                raw_conviction = np.clip(z_distance / max_z, 0.0, 1.0)
+            else:
+                # At or above mean — regime confirmed upstream (tier1 + gatekeeper passed)
+                # Use monte score as conviction so strong trends still get meaningful size
+                raw_conviction = float(frame.risk.monte_score)
             
             # Piece 99: Cost Penalty
             # formula: total_cost_bps / cost_penalty_divisor
@@ -97,11 +102,7 @@ class AllocationGland:
                 stop_price = float(frame.valuation.lower_band)
                 stop_distance = abs(price - stop_price)
                 
-                size_reason = "SIZED_MEAN_REVERSION"
-                if z_distance <= 0:
-                    raw_qty = 0.0
-                    size_reason = "NO_TRADE_ABOVE_MEAN"
-                elif stop_distance <= 0:
+                if stop_distance <= 0:
                     # Piece 107: MNER ALLOC-E-SIZE-902
                     emit_mner(
                         "ALLOC-E-SIZE-902",
@@ -114,8 +115,12 @@ class AllocationGland:
                     size_reason = "NO_TRADE_STOP_INVALID"
                 else:
                     raw_qty = (equity * risk_pct * adjusted_conviction) / stop_distance
-                    if adjusted_conviction < raw_conviction:
-                        size_reason = "SIZED_COST_PENALIZED"
+                    if z_distance > 0:
+                        size_reason = "SIZED_MEAN_REVERSION"
+                        if adjusted_conviction < raw_conviction:
+                            size_reason = "SIZED_COST_PENALIZED"
+                    else:
+                        size_reason = "SIZED_REGIME_ABOVE_MEAN"
                 
             # Piece 102: Hard Caps
             max_notional = frame.standards.get(

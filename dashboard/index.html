@@ -29,6 +29,13 @@
         <button class="v-btn stop" onclick="stopEngine()">STOP ENGINE</button>
         <button class="v-btn" onclick="refreshDryRun()">REFRESH</button>
       </div>
+      <div class="v-card" style="margin-top:8px;">
+        <div class="v-card-header">Backtest (Fornix)</div>
+        <button class="v-btn" id="fornixBtn" onclick="runBacktest()" style="background:var(--action);color:#fff;width:100%;">RUN BACKTEST</button>
+        <button class="v-btn stop" id="fornixStopBtn" onclick="stopFornix()" style="display:none;width:100%;margin-top:4px;">STOP BACKTEST</button>
+        <div id="fornixStatus" style="font-size:11px;color:var(--muted);padding:4px 0;min-height:16px;"></div>
+        <div id="fornixProgress" style="font-size:11px;color:var(--ok);min-height:14px;"></div>
+      </div>
       <div class="v-card" style="margin-top:auto;">
         <div class="v-card-header">System</div>
         <div id="connectionState"
@@ -550,6 +557,17 @@
               setStatus(event.data.msg || 'ENGINE_EVENT');
               addLog(event.data.msg || 'Engine event');
             }
+          } else if (event.type === 'execution') {
+            const t = String(event.data.transition || '').toUpperCase();
+            const sym = (String(event.data.symbol || '')).split('/')[0];
+            const price = event.data.price ? `$${Math.round(Number(event.data.price))}` : '';
+            const risk = event.data.risk_score ? ` r=${Number(event.data.risk_score).toFixed(2)}` : '';
+            const lvl = (t === 'REJECT' || t === 'CANCEL') ? 'error' : undefined;
+            addLog(`${t} ${sym} ${price}${risk}`, lvl);
+          } else if (event.type === 'fornix_lifecycle') {
+            _handleFornixLifecycle(event.data);
+          } else if (event.type === 'fornix_progress') {
+            _handleFornixProgress(event.data);
           } else if (event.type === 'furnace') {
             const decision = String(event.data.decision || '').toUpperCase();
             const level = decision === 'PIPELINE_ERROR' ? 'error' : undefined;
@@ -739,6 +757,102 @@
       addLog('Manual refresh');
     }
 
+    // ── Fornix (Backtest) ──
+    function _adoptFornixRunningState(fs) {
+      id('fornixBtn').disabled = true;
+      id('fornixBtn').textContent = 'RUNNING...';
+      id('fornixStopBtn').style.display = 'block';
+      const sym = fs.current_symbol || '?';
+      const pct = fs.total_bars > 0 ? Math.round(fs.bars_done / fs.total_bars * 100) : 0;
+      id('fornixStatus').textContent = `${sym} | run: ${(fs.run_id || '').substring(0, 8)}`;
+      if (fs.bars_done > 0) {
+        id('fornixProgress').textContent =
+          `${sym} ${pct}% | ${Math.round(fs.bars_per_sec || 0)} b/s | ETA ${(fs.eta_minutes || 0).toFixed(1)}m`;
+      }
+      addLog(`Attached to running Fornix: ${sym} | ${pct}% | run=${(fs.run_id || '').substring(0, 8)}`);
+    }
+
+    async function runBacktest() {
+      if (!apiToken) { addLog('No token', 'error'); return; }
+      try {
+        const res = await fetch(`${API_BASE}/api/fornix/start`, {
+          method: 'POST', headers: authHeaders(),
+          body: JSON.stringify({ full: false }),
+        });
+        const d = await res.json();
+        if (!res.ok) {
+          if (d.error === 'fornix_already_running') {
+            // Adopt the running instance instead of erroring
+            try {
+              const fr = await fetch(`${API_BASE}/api/fornix/state`, { headers: authHeaders() });
+              if (fr.ok) _adoptFornixRunningState(await fr.json());
+            } catch (_) {}
+            return;
+          }
+          const msg = d.error === 'no_symbols_in_market_tape'
+            ? 'No symbols in market_tape — ingest CSV data first'
+            : `Fornix start failed: ${d.error || 'unknown'}`;
+          addLog(msg, 'error');
+          id('fornixStatus').textContent = msg;
+          return;
+        }
+        const syms = Array.isArray(d.symbols) ? d.symbols.join(' + ') : (d.symbols || '?');
+        id('fornixBtn').disabled = true;
+        id('fornixBtn').textContent = 'RUNNING...';
+        id('fornixStopBtn').style.display = 'block';
+        id('fornixStatus').textContent = `${syms} | run: ${(d.run_id || '').substring(0, 8)}`;
+        addLog(`Fornix started: ${syms} | run=${(d.run_id || '').substring(0, 8)}`);
+      } catch (e) {
+        addLog('Fornix start error', 'error');
+      }
+    }
+
+    async function stopFornix() {
+      try {
+        await fetch(`${API_BASE}/api/fornix/stop`, { method: 'POST', headers: authHeaders() });
+      } catch (e) { /* silent */ }
+      // Reset immediately — don't wait for SSE
+      id('fornixBtn').disabled = false;
+      id('fornixBtn').textContent = 'RUN BACKTEST';
+      id('fornixStopBtn').style.display = 'none';
+      id('fornixProgress').textContent = '';
+      id('fornixStatus').textContent = 'Stopped';
+      addLog('Fornix stopped');
+    }
+
+    function _handleFornixLifecycle(data) {
+      const lc = String(data.lifecycle || '').toUpperCase();
+      if (lc === 'STOPPED') {
+        id('fornixBtn').disabled = false;
+        id('fornixBtn').textContent = 'RUN BACKTEST';
+        id('fornixStopBtn').style.display = 'none';
+        id('fornixProgress').textContent = '';
+        const crashed = data.exit_kind === 'CRASH';
+        const summary = [
+          data.bars   ? `bars=${data.bars}`   : '',
+          data.mints  ? `mints=${data.mints}`  : '',
+          data.trades ? `trades=${data.trades}` : '',
+        ].filter(Boolean).join(' ');
+        const statusLine = crashed ? 'CRASHED' : (summary || 'COMPLETE');
+        id('fornixStatus').textContent = statusLine;
+        addLog(`FORNIX DONE — ${statusLine}`, crashed ? 'error' : undefined);
+        if (data.error) addLog(`FORNIX ERR: ${data.error}`, 'error');
+      } else if (lc === 'STARTED' || lc === 'SCHEDULED_START') {
+        const syms = Array.isArray(data.symbols) ? data.symbols.join(' + ') : (data.msg || '');
+        id('fornixBtn').disabled = true;
+        id('fornixBtn').textContent = 'RUNNING...';
+        id('fornixStopBtn').style.display = 'block';
+        id('fornixStatus').textContent = syms;
+        addLog(`FORNIX START — ${syms}`);
+      }
+    }
+
+    function _handleFornixProgress(data) {
+      const pct = data.total_bars > 0 ? Math.round(data.bars_done / data.total_bars * 100) : 0;
+      id('fornixProgress').textContent =
+        `${data.symbol || '?'} ${pct}% | ${Math.round(data.bars_per_sec || 0)} b/s | ETA ${(data.eta_minutes || 0).toFixed(1)}m`;
+    }
+
     async function hydrateFromCurrentState() {
       if (!apiToken) return;
       try {
@@ -779,6 +893,15 @@
       } catch (e) {
         addLog('State hydrate failed', 'error');
       }
+      // Hydrate Fornix state — adopt if already running
+      try {
+        const ff = await fetch(`${API_BASE}/api/fornix/state`, { headers: authHeaders() });
+        if (ff.ok) {
+          const fs = await ff.json();
+          if (fs.running) _adoptFornixRunningState(fs);
+        }
+      } catch (_) {}
+
       // Hydrate brain frame from last known snapshot
       try {
         const fr = await fetch(`${API_BASE}/api/frame/latest`, { headers: authHeaders() });

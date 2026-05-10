@@ -1,6 +1,6 @@
 import numpy as np
 
-# Definitive 23-Dimensional Search Space for Mammon V3
+# Definitive 24-Dimensional Search Space for Mammon V3
 # Order:
 # 0: active_gear
 # 1: monte_noise_scalar
@@ -12,6 +12,7 @@ import numpy as np
 # 15-16: brain_stem_scalars (sigma, bias)
 # 17-20: brain_stem_controls (entry/max/cancel/target)
 # 21-22: exits (stop_loss, breakeven)
+# 23: brain_stem_min_risk
 
 MINS = np.array([
     5,    # 0: Gear
@@ -23,7 +24,8 @@ MINS = np.array([
     0.0, 0.0, # 13-14: Brain Stem blend weights
     0.05, 0.0, # 15-16: sigma, bias
     0.2, 0.0, 0.0, 0.0, # 17-20: entry/cancel/target controls
-    1.5, 1.0  # 21-22: Exits
+    1.5, 1.0, # 21-22: Exits
+    0.40, # 23: brain_stem_min_risk
 ])
 
 MAXS = np.array([
@@ -36,11 +38,12 @@ MAXS = np.array([
     1.0, 1.0, # 13-14: Brain Stem blend weights
     1.0, 0.5, # 15-16: sigma, bias
     3.0, 5.0, 250.0, 5.0, # 17-20: entry/cancel/target controls
-    12.0, 10.0 # 21-22: Exits
+    12.0, 10.0, # 21-22: Exits
+    0.70, # 23: brain_stem_min_risk
 ])
 
 def normalize_weights(raw_row):
-    """Robustly normalizes the four weight groups in a 23-D row."""
+    """Robustly normalizes the four weight groups in a 24-D row."""
     s = raw_row.copy()
     
     # 1. Monte (2-4)

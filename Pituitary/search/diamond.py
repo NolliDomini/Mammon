@@ -36,7 +36,7 @@ class DiamondGland:
             return
 
         # V3.1: Dump to private refinery silo
-        self.scribe.dump(list(data.itertuples(index=False, name=None)))
+        self.scribe.dump(data)
 
         # 2. Extract X (Params) and y (Realized Fitness) from SILO
         param_cols = [

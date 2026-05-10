@@ -236,9 +236,9 @@ class Thalamus:
         return out
 
     def warmup_context(self, symbols: list, is_crypto: bool = True) -> None:
-        """Pull 60 min of historical 1m bars to prime SmartGland before live stream starts."""
+        """Pull 1000 min of historical 1m bars to prime SmartGland before live stream starts."""
         end = datetime.now(timezone.utc)
-        start = end - timedelta(minutes=60)
+        start = end - timedelta(minutes=1000)
         try:
             df = self._pulse_from_alpaca(symbols, TimeFrame.Minute, start, end, is_crypto)
             if not df.empty:

@@ -8,7 +8,7 @@ Runs at ACTION and MINT pulses only. On ACTION, passes three gates (Risk Monte, 
 
 ## What It Does
 
-- **Gate 1 — Risk**: 1k-path Monte Carlo on current price; must exceed `brain_stem_min_risk` (default 0.65)
+- **Gate 1 — Risk**: 1k-path Monte Carlo on current price; must exceed `brain_stem_min_risk` (default 0.52, optimizer-tunable via PARAM_KEYS index 23, bounds 0.40–0.70)
 - **Gate 2 — Valuation**: 10k-path stddev simulation; entry z-score must be ≤ `brain_stem_entry_max_z` (default 0.8)
 - **Gate 3 — Prior**: blended conviction `(monte_score × w_turtle) + (council × w_council)` must exceed 0.5
 - **ACTION arm**: records `intent_id` in `money_orders` via TreasuryGland; sets `pending_entry`
@@ -25,7 +25,7 @@ Runs at ACTION and MINT pulses only. On ACTION, passes three gates (Risk Monte, 
 
 | Param | Default | Purpose |
 |---|---|---|
-| `brain_stem_min_risk` | 0.65 | Risk gate floor (independent of Gatekeeper) |
+| `brain_stem_min_risk` | 0.52 | Risk gate floor (independent of Gatekeeper; optimizer-tunable) |
 | `brain_stem_entry_max_z` | 0.8 | Max z-score above fair value to enter |
 | `brain_stem_stale_price_cancel_bps` | 25.0 | Cancel if price moves this many bps between ARM and FIRE |
 | `brain_stem_sigma` | 0.10 | Noise scalar for both Monte runs |

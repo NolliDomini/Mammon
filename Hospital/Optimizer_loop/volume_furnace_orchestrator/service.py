@@ -1,3 +1,5 @@
+import queue
+import threading
 import uuid
 import json
 from typing import Any, Dict, Optional
@@ -10,6 +12,7 @@ from Hippocampus.Context.mner import emit_mner
 class VolumeFurnaceOrchestrator:
     """
     Runtime cadence orchestrator for the Stage A-H optimizer v2 pipeline.
+    Pipeline runs in a background daemon thread so the main pulse loop is never blocked.
     """
 
     VALID_MODES = {"DRY_RUN", "PAPER", "LIVE", "BACKTEST"}
@@ -30,11 +33,19 @@ class VolumeFurnaceOrchestrator:
         self.mint_count = 0
         self.activation_count = 0
         self.last_decision = "INIT"
-        self.last_summary: Dict[str, Any] = {}
         self.last_error: Optional[str] = None
-        self.telemetry: list[Dict[str, Any]] = []
         self.telemetry_limit = 200
         self.pituitary = pituitary
+
+        self._lock = threading.Lock()
+        self._last_summary: Dict[str, Any] = {}
+        self._telemetry: list[Dict[str, Any]] = []
+
+        # Bounded queue — size 1 so a slow pipeline run never queues stale work.
+        # If the worker is still busy when the next cadence tick fires, we drop it.
+        self._job_queue: queue.Queue = queue.Queue(maxsize=1)
+        self._worker = threading.Thread(target=self._run_worker, daemon=True, name="furnace-worker")
+        self._worker.start()
 
         self.opt_lib = OptimizerLibrarian()
         self.opt_lib.setup_schema()
@@ -50,8 +61,91 @@ class VolumeFurnaceOrchestrator:
             f"[FURNACE_V2] event=init run_id={self.run_id} "
             f"execution_mode={self.execution_mode} simulation_mode={self.simulation_mode} "
             f"external_cadence={self.external_cadence} "
-            f"mode=STAGE_A_H_ACTIVE"
+            f"mode=STAGE_A_H_ACTIVE_ASYNC"
         )
+
+    @property
+    def last_summary(self) -> Dict[str, Any]:
+        with self._lock:
+            return dict(self._last_summary)
+
+    @last_summary.setter
+    def last_summary(self, value: Dict[str, Any]):
+        with self._lock:
+            self._last_summary = value if isinstance(value, dict) else {}
+
+    @property
+    def telemetry(self) -> list:
+        with self._lock:
+            return list(self._telemetry)
+
+    def _run_worker(self):
+        """Background daemon: drains job queue and runs the optimizer pipeline."""
+        while not self.shutdown_requested:
+            try:
+                job = self._job_queue.get(timeout=1.0)
+            except queue.Empty:
+                continue
+            if job is None:
+                break
+            try:
+                summary = self.engine.run_pipeline(**job["pipeline_kwargs"])
+                summary = summary if isinstance(summary, dict) else {"result": summary}
+                with self._lock:
+                    self._last_summary = summary
+                self.last_error = None
+                self._promote_winner_to_silver(summary, job["regime_id"])
+                self._record_decision("EXECUTED", **job["record_kwargs"])
+            except Exception as exc:
+                self.last_error = str(exc)
+                with self._lock:
+                    self._last_summary = {}
+                self._record_decision(
+                    "PIPELINE_ERROR",
+                    pulse_type=job.get("pulse_type", "UNKNOWN"),
+                    regime_id=job.get("regime_id", "UNKNOWN"),
+                    error=str(exc),
+                    context_fallbacks=job.get("record_kwargs", {}).get("context_fallbacks", []),
+                )
+                emit_mner(
+                    "SOUL-E-P35-208",
+                    "FURNACE_PIPELINE_ERROR",
+                    source="Hospital.Optimizer_loop.volume_furnace_orchestrator.service.VolumeFurnaceOrchestrator._run_worker",
+                    details={
+                        "run_id": self.run_id,
+                        "mint": self.mint_count,
+                        "activation": self.activation_count,
+                        "regime_id": job.get("regime_id", "UNKNOWN"),
+                        "error": str(exc),
+                    },
+                )
+            finally:
+                self._job_queue.task_done()
+
+    def _submit_pipeline(
+        self,
+        *,
+        pulse_type: str,
+        regime_id: str,
+        pipeline_kwargs: Dict[str, Any],
+        record_kwargs: Dict[str, Any],
+    ):
+        """Submit a pipeline job to the background worker. Drops silently if worker is busy."""
+        job = {
+            "pulse_type": pulse_type,
+            "regime_id": regime_id,
+            "pipeline_kwargs": pipeline_kwargs,
+            "record_kwargs": record_kwargs,
+        }
+        try:
+            self._job_queue.put_nowait(job)
+        except queue.Full:
+            self._record_decision(
+                "QUEUE_FULL",
+                pulse_type=pulse_type,
+                regime_id=regime_id,
+                context_fallbacks=record_kwargs.get("context_fallbacks", []),
+            )
 
     def _load_winner_params(self, candidate_id: str) -> Optional[Dict[str, Any]]:
         if not candidate_id:
@@ -114,9 +208,10 @@ class VolumeFurnaceOrchestrator:
             "activation": self.activation_count,
         }
         evt.update(fields)
-        self.telemetry.append(evt)
-        if len(self.telemetry) > self.telemetry_limit:
-            self.telemetry = self.telemetry[-self.telemetry_limit :]
+        with self._lock:
+            self._telemetry.append(evt)
+            if len(self._telemetry) > self.telemetry_limit:
+                self._telemetry = self._telemetry[-self.telemetry_limit :]
 
     def _coerce_context(
         self,
@@ -242,49 +337,24 @@ class VolumeFurnaceOrchestrator:
         allow_bayesian = (self.activation_count % 4) == 0
         mutations = walk_seed.mutations if walk_seed else None
 
-        try:
-            summary = self.engine.run_pipeline(
+        self._submit_pipeline(
+            pulse_type=pulse_type,
+            regime_id=regime_ctx,
+            pipeline_kwargs=dict(
                 regime_id=regime_ctx,
                 price=price_ctx,
                 atr=atr_ctx,
                 stop_level=stop_ctx,
                 allow_bayesian=allow_bayesian,
                 mutations=mutations,
-            )
-            self.last_summary = summary if isinstance(summary, dict) else {"result": summary}
-            self._promote_winner_to_silver(self.last_summary, regime_ctx)
-            self.last_error = None
-            self._record_decision(
-                "EXECUTED",
+            ),
+            record_kwargs=dict(
                 pulse_type=pulse_type,
                 regime_id=regime_ctx,
                 allow_bayesian=allow_bayesian,
                 context_fallbacks=fallback_flags,
-                promotion_decision=self.last_summary.get("promotion_decision")
-                or self.last_summary.get("reason"),
-            )
-        except Exception as exc:
-            self.last_error = str(exc)
-            self.last_summary = {}
-            self._record_decision(
-                "PIPELINE_ERROR",
-                pulse_type=pulse_type,
-                regime_id=regime_ctx,
-                error=str(exc),
-                context_fallbacks=fallback_flags,
-            )
-            emit_mner(
-                "SOUL-E-P35-208",
-                "FURNACE_PIPELINE_ERROR",
-                source="Hospital.Optimizer_loop.volume_furnace_orchestrator.service.VolumeFurnaceOrchestrator.handle_pulse",
-                details={
-                    "run_id": self.run_id,
-                    "mint": self.mint_count,
-                    "activation": self.activation_count,
-                    "regime_id": regime_ctx,
-                    "error": str(exc),
-                },
-            )
+            ),
+        )
 
     def handle_frame(self, *, pulse_type: str, frame: Any, walk_seed: Any = None):
         """
@@ -346,52 +416,31 @@ class VolumeFurnaceOrchestrator:
             return
 
         allow_bayesian = (self.activation_count % 4) == 0
-        try:
-            summary = self.engine.run_pipeline(
+
+        self._submit_pipeline(
+            pulse_type=pulse_type,
+            regime_id=regime_ctx,
+            pipeline_kwargs=dict(
                 regime_id=regime_ctx,
                 price=price_ctx,
                 atr=atr_ctx,
                 stop_level=stop_ctx,
                 allow_bayesian=allow_bayesian,
                 mutations=mutations,
-            )
-            self.last_summary = summary if isinstance(summary, dict) else {"result": summary}
-            self._promote_winner_to_silver(self.last_summary, regime_ctx)
-            self.last_error = None
-            self._record_decision(
-                "EXECUTED",
+            ),
+            record_kwargs=dict(
                 pulse_type=pulse_type,
                 regime_id=regime_ctx,
                 allow_bayesian=allow_bayesian,
                 mode_context=mode,
                 context_fallbacks=fallback_flags,
-                promotion_decision=self.last_summary.get("promotion_decision")
-                or self.last_summary.get("reason"),
-            )
-        except Exception as exc:
-            self.last_error = str(exc)
-            self.last_summary = {}
-            self._record_decision(
-                "PIPELINE_ERROR",
-                pulse_type=pulse_type,
-                regime_id=regime_ctx,
-                error=str(exc),
-                context_fallbacks=fallback_flags,
-            )
-            emit_mner(
-                "SOUL-E-P35-208",
-                "FURNACE_PIPELINE_ERROR",
-                source="Hospital.Optimizer_loop.volume_furnace_orchestrator.service.VolumeFurnaceOrchestrator.handle_frame",
-                details={
-                    "run_id": self.run_id,
-                    "mint": self.mint_count,
-                    "activation": self.activation_count,
-                    "regime_id": regime_ctx,
-                    "error": str(exc),
-                },
-            )
+            ),
+        )
 
     def get_state(self) -> Dict[str, Any]:
+        with self._lock:
+            tail = list(self._telemetry[-20:])
+            summary = dict(self._last_summary)
         return {
             "run_id": self.run_id,
             "execution_mode": self.execution_mode,
@@ -401,13 +450,20 @@ class VolumeFurnaceOrchestrator:
             "mint_count": self.mint_count,
             "activation_count": self.activation_count,
             "last_decision": self.last_decision,
-            "last_summary": self.last_summary,
+            "last_summary": summary,
             "last_error": self.last_error,
-            "telemetry_tail": self.telemetry[-20:],
+            "worker_alive": self._worker.is_alive(),
+            "queue_depth": self._job_queue.qsize(),
+            "telemetry_tail": tail,
         }
 
     def shutdown(self):
         self.shutdown_requested = True
+        try:
+            self._job_queue.put_nowait(None)
+        except queue.Full:
+            pass
+        self._worker.join(timeout=5.0)
         print(f"[FURNACE_V2] event=shutdown run_id={self.run_id}")
 
     @staticmethod

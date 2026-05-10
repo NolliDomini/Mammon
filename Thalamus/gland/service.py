@@ -13,7 +13,7 @@ class SmartGland:
     - Soul retains final cadence authority.
     - Context-Aware: Maintains trailing 50 bars of history.
     """
-    def __init__(self, window_minutes: int = 5, context_size: int = 50):
+    def __init__(self, window_minutes: int = 5, context_size: int = 200):
         self.window_minutes = window_minutes
         self.context_size = context_size
         self.seed_offset_min = 2.25

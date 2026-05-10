@@ -23,7 +23,18 @@ class DuckPond:
         self.db_path = db_path
         self.conn = duckdb.connect(self.db_path)
         self._init_schema()
-    
+
+    def close(self):
+        try:
+            if self.conn:
+                self.conn.close()
+                self.conn = None
+        except Exception:
+            pass
+
+    def __del__(self):
+        self.close()
+
     @staticmethod
     def _env_int(name: str, default: int) -> int:
         raw = os.environ.get(name)

@@ -34,7 +34,7 @@ load_dotenv()
 DASHBOARD_DIR = ROOT_DIR / "dashboard"
 app = Flask(__name__, static_folder=str(DASHBOARD_DIR), static_url_path="/static")
 API_BEARER_TOKEN = os.environ.get("MAMMON_API_TOKEN", "dev-token")
-STOP_ON_WINDOW_CLOSE = str(os.environ.get("MAMMON_STOP_ON_WINDOW_CLOSE", "0")).strip().lower() in {
+STOP_ON_WINDOW_CLOSE = str(os.environ.get("MAMMON_STOP_ON_WINDOW_CLOSE", "1")).strip().lower() in {
     "1",
     "true",
     "yes",
@@ -191,6 +191,7 @@ class EngineState:
         self.trigger = None
         self.thalamus = None
         self.last_frame_dict: Optional[dict] = None
+        self._stream_loop = None  # asyncio loop for the WebSocket stream thread
 
         # Lifecycle forensics
         self.stop_requested = False
@@ -246,6 +247,221 @@ class EngineState:
 
 
 state = EngineState()
+
+
+# ------------------------------------------------------------------ #
+#  FORNIX STATE                                                        #
+# ------------------------------------------------------------------ #
+class FornixState:
+    """Thread-safe state container for the Fornix backtest engine."""
+
+    def __init__(self):
+        self.running = False
+        self.thread: Optional[threading.Thread] = None
+        self.run_id: Optional[str] = None
+        self.started_at: Optional[float] = None
+        self.current_symbol: Optional[str] = None
+        self.bars_done: int = 0
+        self.total_bars: int = 0
+        self.mints: int = 0
+        self.signals: int = 0
+        self.bars_per_sec: float = 0.0
+        self.eta_minutes: float = 0.0
+        self.last_exit: str = "NEVER_STARTED"
+        self.error: str = ""
+        self.fornix = None
+        self.combo_index: int = 0
+        self.lock = threading.Lock()
+
+
+fornix_state = FornixState()
+
+
+def _fornix_loop(full: bool, symbols: Optional[list], run_id: str) -> None:
+    """Background thread that runs the Fornix replay engine."""
+    # Suspend live trading for the duration of the backtest
+    with state.lock:
+        was_trading = state.trading_enabled
+        state.trading_enabled = False
+    state.push_event("system", {"msg": "Trading suspended — backtest running"})
+
+    try:
+        from Hippocampus.fornix.service import Fornix, TEST_PULSE_25, TEST_PULSE_FULL
+
+        pulse = TEST_PULSE_FULL if full else TEST_PULSE_25
+
+        def _progress(symbol, bars_done, total_bars, mints, signals, bars_per_sec, eta_minutes):
+            with fornix_state.lock:
+                fornix_state.current_symbol = symbol
+                fornix_state.bars_done = bars_done
+                fornix_state.total_bars = total_bars
+                fornix_state.mints = mints
+                fornix_state.signals = signals
+                fornix_state.bars_per_sec = bars_per_sec
+                fornix_state.eta_minutes = eta_minutes
+            pct = round(bars_done / total_bars * 100, 1) if total_bars > 0 else 0.0
+            state.push_event("fornix_progress", {
+                "symbol": symbol,
+                "bars_done": bars_done,
+                "total_bars": total_bars,
+                "mints": mints,
+                "signals": signals,
+                "bars_per_sec": round(bars_per_sec, 1),
+                "eta_minutes": round(eta_minutes, 1),
+                "run_id": run_id,
+            })
+            # Also push to neural log so the user sees the engine is alive.
+            state.push_event("system", {
+                "msg": f"FORNIX {symbol} | {bars_done:,}/{total_bars:,} ({pct}%) | {round(bars_per_sec,1)}/s | MINTs:{mints} | ETA:{round(eta_minutes,1)}m"
+            })
+
+        f = Fornix(test_pulse=pulse, progress_callback=_progress)
+        with fornix_state.lock:
+            fornix_state.fornix = f
+
+        state.push_event("fornix_lifecycle", {
+            "lifecycle": "STARTED",
+            "run_id": run_id,
+            "full": full,
+            "msg": f"Fornix started ({'FULL' if full else 'TEST_PULSE_25'})",
+        })
+
+        f.run(symbols=symbols)
+
+        with fornix_state.lock:
+            fornix_state.last_exit = "COMPLETE"
+
+        state.push_event("fornix_lifecycle", {
+            "lifecycle": "STOPPED",
+            "run_id": run_id,
+            "msg": "Fornix replay complete",
+            "bars": getattr(f, "total_bars_processed", 0),
+            "mints": getattr(f, "total_mints", 0),
+            "signals": getattr(f, "total_signals", 0),
+            "trades": getattr(f, "total_trades", 0),
+        })
+
+    except Exception as e:
+        tb = traceback.format_exc(limit=20)
+        with fornix_state.lock:
+            fornix_state.last_exit = "CRASH"
+            fornix_state.error = _safe_str(e, 400)
+        state.push_event("fornix_lifecycle", {
+            "lifecycle": "STOPPED",
+            "run_id": run_id,
+            "exit_kind": "CRASH",
+            "msg": f"Fornix crash: {_safe_str(e)}",
+            "error": _safe_str(e, 400),
+        })
+        print(f"[FORNIX] Crash: {e}")
+        print(tb)
+    finally:
+        with state.lock:
+            state.trading_enabled = was_trading
+        state.push_event("system", {"msg": "Trading resumed — backtest complete"})
+        with fornix_state.lock:
+            if fornix_state.run_id == run_id:
+                fornix_state.running = False
+                fornix_state.fornix = None
+                fornix_state.thread = None
+
+
+# ------------------------------------------------------------------ #
+#  COMBO CYCLING & FORNIX JOB HELPERS                                 #
+# ------------------------------------------------------------------ #
+def _get_next_combo() -> Optional[list]:
+    """
+    Picks the next (stock, crypto) combo from DuckDB market_tape symbols, cycling each call.
+    Stocks = anything without '/' and not ending _USD/USDT/USDC.
+    Cryptos = everything with '/' or those suffixes.
+    Returns a list like ['AAPL', 'BTC/USD'], or None if nothing in DuckDB.
+    """
+    try:
+        import duckdb as _duckdb
+        _duck_path = str(Path(__file__).resolve().parent / "Hospital" / "Memory_care" / "duck.db")
+        _con = _duckdb.connect(_duck_path)
+        try:
+            rows = _con.execute("SELECT DISTINCT symbol FROM market_tape ORDER BY symbol").fetchall()
+        finally:
+            try:
+                _con.close()
+            except Exception:
+                pass
+        all_syms = [r[0] for r in rows]
+    except Exception as e:
+        print(f"[COMBO] DuckDB unavailable: {e}")
+        return None
+
+    cryptos = [s for s in all_syms if "/" in s or s.upper().endswith(("_USD", "_USDT", "_USDC"))]
+    stocks  = [s for s in all_syms if s not in cryptos]
+
+    with fornix_state.lock:
+        idx = fornix_state.combo_index
+        fornix_state.combo_index += 1
+
+    combo = []
+    if stocks:
+        combo.append(stocks[idx % len(stocks)])
+    if cryptos:
+        combo.append(cryptos[idx % len(cryptos)])
+    return combo or None
+
+
+def _start_fornix_job(full: bool, symbols: Optional[list], source: str = "api") -> Optional[str]:
+    """Start Fornix in a background thread. Returns run_id or None if already running."""
+    with fornix_state.lock:
+        if fornix_state.running:
+            return None
+        run_id = uuid.uuid4().hex
+        fornix_state.running = True
+        fornix_state.run_id = run_id
+        fornix_state.started_at = time.time()
+        fornix_state.current_symbol = None
+        fornix_state.bars_done = 0
+        fornix_state.total_bars = 0
+        fornix_state.mints = 0
+        fornix_state.signals = 0
+        fornix_state.bars_per_sec = 0.0
+        fornix_state.eta_minutes = 0.0
+        fornix_state.last_exit = "RUNNING"
+        fornix_state.error = ""
+
+    t = threading.Thread(
+        target=_fornix_loop,
+        args=(full, symbols, run_id),
+        daemon=True,
+        name=f"mammon-fornix-{source}-{run_id[:8]}",
+    )
+    with fornix_state.lock:
+        fornix_state.thread = t
+    t.start()
+    return run_id
+
+
+def _midnight_fornix_job() -> None:
+    """
+    APScheduler midnight job.
+    Always fires regardless of engine mode — suspends live trading
+    for the duration of the replay (handled inside _fornix_loop).
+    """
+    if fornix_state.running:
+        print("[SCHEDULER] Midnight Fornix skipped — Fornix already active.")
+        return
+    combo = _get_next_combo()
+    if not combo:
+        print("[SCHEDULER] Midnight Fornix skipped — no symbols in market_tape.")
+        return
+    run_id = _start_fornix_job(full=False, symbols=combo, source="midnight")
+    if run_id:
+        print(f"[SCHEDULER] Midnight Fornix fired: run_id={run_id[:8]}, symbols={combo}")
+        state.push_event("fornix_lifecycle", {
+            "lifecycle": "SCHEDULED_START",
+            "run_id": run_id,
+            "msg": f"Midnight backtest started: {combo}",
+            "symbols": combo,
+        })
+    else:
+        print("[SCHEDULER] Midnight Fornix: could not start (race).")
 
 
 # ------------------------------------------------------------------ #
@@ -567,6 +783,9 @@ def _engine_loop(symbols: list, is_crypto_map: dict):
 
         _stream_errors: list = []
         _stream_loop = _asyncio.new_event_loop()
+        with state.lock:
+            state._stream_loop = _stream_loop
+        _last_bs_exec_ts = [""]  # mutable container so the async closure can update it
 
         async def _on_live_bar(bar) -> None:
             if not state.running:
@@ -626,6 +845,18 @@ def _engine_loop(symbols: list, is_crypto_map: dict):
                         with state.lock:
                             state.last_frame_dict = event_data
                         state.push_event("pulse", event_data)
+
+                # Push ARM / FIRE / EXIT / REJECT / CANCEL to SSE so the log shows them
+                _bs = orchestrator.lobes.get("Brain_Stem")
+                if _bs is not None:
+                    _exec = getattr(_bs, "last_execution_event", {})
+                    _exec_ts = str(_exec.get("ts", ""))
+                    if _exec_ts and _exec_ts != _last_bs_exec_ts[0]:
+                        _last_bs_exec_ts[0] = _exec_ts
+                        if str(_exec.get("transition", "")).upper() in {
+                            "ARM", "FIRE", "EXIT", "REJECT", "CANCEL"
+                        }:
+                            state.push_event("execution", {**_exec, "symbol": symbol})
 
             except Exception as e:
                 emit_mner(
@@ -740,6 +971,7 @@ def _engine_loop(symbols: list, is_crypto_map: dict):
             if is_current_owner:
                 state.running = False
                 state.started_at = None
+                state._stream_loop = None
                 state.active_symbol = None
                 state.orchestrator = None
                 state.trigger = None
@@ -793,6 +1025,67 @@ def _engine_loop(symbols: list, is_crypto_map: dict):
             had_crash=bool(crash_exc),
         )
         print(f"[DASHBOARD] Engine stopped: run_id={run_id}, exit_kind={exit_kind}, reason={exit_reason}")
+
+
+# ------------------------------------------------------------------ #
+#  HARD STOP — kills engine, stream loop, and Fornix atomically        #
+# ------------------------------------------------------------------ #
+def _kill_thread(t: threading.Thread) -> None:
+    """Inject SystemExit into a live thread via ctypes. Kills it on next bytecode."""
+    if t is None or not t.is_alive():
+        return
+    import ctypes
+    tid = t.ident
+    if tid is None:
+        return
+    ret = ctypes.pythonapi.PyThreadState_SetAsyncExc(
+        ctypes.c_ulong(tid), ctypes.py_object(SystemExit)
+    )
+    if ret > 1:
+        ctypes.pythonapi.PyThreadState_SetAsyncExc(ctypes.c_ulong(tid), None)
+
+
+def _stop_engine_only(source: str, reason: str, detail: str = "") -> None:
+    """Kill the engine thread. Fornix is unaffected."""
+    with state.lock:
+        if state.running:
+            state.request_stop(source=source, reason=reason, detail=detail)
+        loop = state._stream_loop
+        engine_thread = state.thread
+    if loop is not None and not loop.is_closed():
+        try:
+            loop.call_soon_threadsafe(loop.stop)
+        except Exception:
+            pass
+    _kill_thread(engine_thread)
+
+
+def _stop_fornix_only() -> None:
+    """Kill the Fornix thread and release duck.db lock. Engine is unaffected."""
+    with fornix_state.lock:
+        f = fornix_state.fornix
+        fornix_thread = fornix_state.thread
+    if f is not None:
+        f.shutdown_requested = True
+        # Close the pond from OUTSIDE the thread first — releases the duck.db file lock
+        # immediately regardless of what C extension the thread is currently inside.
+        try:
+            f.pond.close()
+        except Exception:
+            pass
+    _kill_thread(fornix_thread)
+    # Mark state dead now so the next start isn't blocked.
+    with fornix_state.lock:
+        if fornix_state.thread is fornix_thread:
+            fornix_state.running = False
+            fornix_state.fornix = None
+            fornix_state.thread = None
+
+
+def _hard_stop(source: str, reason: str, detail: str = "") -> None:
+    """Kill both engine and Fornix threads. Docker process stays alive."""
+    _stop_engine_only(source=source, reason=reason, detail=detail)
+    _stop_fornix_only()
 
 
 # ------------------------------------------------------------------ #
@@ -866,14 +1159,16 @@ def api_stop():
     reason = _clip(data.get("reason") or request.args.get("reason") or "manual_stop", 120)
     detail = _clip(data.get("detail") or request.args.get("detail") or "", 240)
     with state.lock:
-        if not state.running:
+        run_id = state.run_id
+        was_running = state.running
+        if not was_running:
             return jsonify({
                 "status": "already_stopped",
                 "last_exit_kind": state.last_exit_kind,
                 "last_exit_reason": state.last_exit_reason,
             }), 200
-        run_id = state.run_id
-        state.request_stop(source=source, reason=reason, detail=detail)
+
+    _stop_engine_only(source=source, reason=reason, detail=detail)
 
     state.push_event("system", {
         "msg": f"Stop requested by {source}: {reason}",
@@ -985,6 +1280,72 @@ def api_furnace_state():
 
 
 # ------------------------------------------------------------------ #
+#  ROUTES: Fornix (Backtest)                                          #
+# ------------------------------------------------------------------ #
+@app.route("/api/fornix/start", methods=["POST"])
+def api_fornix_start():
+    data = request.get_json() or {}
+    full = bool(data.get("full", False))
+    symbols_raw = data.get("symbols", None)
+
+    # Normalise any explicit symbol list
+    if isinstance(symbols_raw, str):
+        symbols_raw = [s.strip() for s in symbols_raw.split(",") if s.strip()]
+
+    # Auto-pick next stock + crypto combo from DuckDB when caller passes nothing
+    if not symbols_raw:
+        symbols_raw = _get_next_combo()
+        if not symbols_raw:
+            return jsonify({"error": "no_symbols_in_market_tape"}), 422
+
+    run_id = _start_fornix_job(full=full, symbols=symbols_raw, source="ui")
+    if run_id is None:
+        with fornix_state.lock:
+            return jsonify({"error": "fornix_already_running", "run_id": fornix_state.run_id}), 409
+
+    return jsonify({"status": "ok", "run_id": run_id, "full": full, "symbols": symbols_raw})
+
+
+@app.route("/api/fornix/stop", methods=["POST"])
+def api_fornix_stop():
+    with fornix_state.lock:
+        if not fornix_state.running:
+            return jsonify({"status": "not_running"}), 200
+        run_id = fornix_state.run_id
+    _stop_fornix_only()
+    state.push_event("fornix_lifecycle", {
+        "lifecycle": "STOPPED",
+        "run_id": run_id,
+        "msg": "Fornix stopped by user",
+    })
+    return jsonify({"status": "ok", "run_id": run_id})
+
+
+@app.route("/api/fornix/state", methods=["GET"])
+def api_fornix_state():
+    with fornix_state.lock:
+        uptime = round(time.time() - fornix_state.started_at, 1) if fornix_state.started_at else 0
+        pct = 0.0
+        if fornix_state.total_bars > 0:
+            pct = round(fornix_state.bars_done / fornix_state.total_bars * 100, 1)
+        return jsonify({
+            "running": fornix_state.running,
+            "run_id": fornix_state.run_id,
+            "current_symbol": fornix_state.current_symbol,
+            "bars_done": fornix_state.bars_done,
+            "total_bars": fornix_state.total_bars,
+            "pct_complete": pct,
+            "mints": fornix_state.mints,
+            "signals": fornix_state.signals,
+            "bars_per_sec": fornix_state.bars_per_sec,
+            "eta_minutes": fornix_state.eta_minutes,
+            "last_exit": fornix_state.last_exit,
+            "error": fornix_state.error,
+            "uptime_sec": uptime,
+        })
+
+
+# ------------------------------------------------------------------ #
 #  ROUTES: SSE Stream                                                  #
 # ------------------------------------------------------------------ #
 @app.route("/api/stream")
@@ -998,15 +1359,23 @@ def api_stream():
         try:
             while True:
                 try:
-                    event = client_q.get(timeout=30)
+                    event = client_q.get(timeout=5)
                     yield f"data: {json.dumps(event)}\n\n"
                 except queue.Empty:
-                    # Send keepalive
                     yield f": keepalive\n\n"
         finally:
             with state.lock:
                 if client_q in state.sse_clients:
                     state.sse_clients.remove(client_q)
+                no_clients_left = not state.sse_clients
+            # When the last browser client drops, hard-stop everything.
+            # This is the reliable path — beforeunload beacons are not guaranteed on hard closes.
+            if STOP_ON_WINDOW_CLOSE and no_clients_left:
+                _hard_stop(
+                    source="sse_disconnect",
+                    reason="all_clients_disconnected",
+                    detail="All SSE clients dropped — hard stop per STOP_ON_WINDOW_CLOSE policy",
+                )
 
     return Response(
         generate(),
@@ -1202,6 +1571,25 @@ def main():
     print(f"[DASHBOARD] Serving UI from: {DASHBOARD_DIR}")
     print(f"[DASHBOARD] API Token: {API_BEARER_TOKEN[:4]}...")
     _require_infra()
+
+    # Start midnight Fornix scheduler (fires at 00:00 UTC; skips if engine not live)
+    try:
+        from apscheduler.schedulers.background import BackgroundScheduler
+        from apscheduler.triggers.cron import CronTrigger
+        _sched = BackgroundScheduler(daemon=True, timezone="UTC")
+        _sched.add_job(
+            _midnight_fornix_job,
+            CronTrigger(hour=0, minute=0, timezone="UTC"),
+            id="midnight_fornix",
+            replace_existing=True,
+        )
+        _sched.start()
+        print("[DASHBOARD] Midnight Fornix scheduler armed (00:00 UTC — only fires when engine is live)")
+    except ImportError:
+        print("[DASHBOARD] APScheduler not found — midnight Fornix disabled. Run: pip install apscheduler")
+    except Exception as e:
+        print(f"[DASHBOARD] Scheduler start failed: {e}")
+
     app.run(host="0.0.0.0", port=port, debug=False, threaded=True)
 
 

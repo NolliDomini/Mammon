@@ -37,6 +37,7 @@ PARAM_KEYS = [
     "brain_stem_mean_rev_target_sigma",
     "stop_loss_mult",
     "breakeven_mult",
+    "brain_stem_min_risk",
 ]
 
 

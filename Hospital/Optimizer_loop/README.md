@@ -1,32 +1,42 @@
-# Optimizer Loop Rebuild
+# Optimizer Loop
 
-Status: Stage A-H v2 pipeline is active.
+Stage A-H v2 pipeline. Active.
 
-Legacy optimizer scripts were mothballed on:
-- 2026-02-19
-- Archive: `C:\Users\Mammon\Desktop\Wick Works\Mammon_Mothball\Optimizer\2026-02-19_214016`
+## Runtime
 
-Active runtime entrypoint:
-- `volume_furnace_orchestrator.py` exposes `VolumeFurnaceOrchestrator`
-- Soul contract path calls `handle_frame(pulse_type, frame, walk_seed)` to consume BrainFrame truth directly.
-- Executes v2 cadence on MINT
- - every 3rd MINT runs Stage A-H pipeline
- - `execution_mode=BACKTEST` (or `simulation_mode=True`) enables 25% cadence mode
- - explicit skip reasons: `CADENCE_GATE`, `MODE_GATE`, `MISSING_CONTEXT`, `SUPPORT_FLOOR`, `SHUTDOWN`
+The `VolumeFurnaceOrchestrator` wraps `OptimizerV2Engine` and fires it from a **background daemon thread** — the pipeline never blocks the main pulse loop. A bounded queue (maxsize=1) drops jobs silently when the worker is still running.
 
-Core implementation:
-- `optimizer_v2.py` runs Stage A-H redesign:
- - edge LHS scan
- - semi-middle band extraction
- - candidate library fill + diversity floor
- - walk context simulation + regime support floor
- - walk-conditioned Monte score vector persistence
- - focused refine + entropy collapse burst
- - Bayesian ranking + diagnostics
- - promotion gate with reason-coded fail-safe decisions
+Soul contract: `handle_frame(pulse_type, frame, walk_seed)` — called each pulse; pipeline only activates on eligible MINTs.
 
-Operational boundary (2026-04-19):
-- Optimizer/Furnace runs candidate scoring and promotion decisions.
-- It does **not** directly execute trades.
-- It does **not** directly bypass Medulla/Brain Stem gates.
-- Gold parameter changes affect live trading only after vault write/coronation and Soul hot-reload.
+## Cadence
+
+| Mode | Cadence |
+|---|---|
+| Live (`external_cadence=False`) | Every 3rd MINT |
+| Live (`external_cadence=True`) | Every MINT |
+| BACKTEST / simulation_mode | Every 4th scheduled activation |
+
+Skip reasons recorded in telemetry: `CADENCE_GATE`, `MODE_GATE`, `MISSING_CONTEXT`, `SUPPORT_FLOOR`, `SHUTDOWN`, `QUEUE_FULL`.
+
+## Pipeline Stages
+
+| Stage | Name |
+|---|---|
+| A | Edge LHS scan |
+| B | Semi-middle band extraction |
+| C | Candidate library fill + diversity floor |
+| D | Walk context simulation + regime support floor |
+| E | Vectorized Monte score |
+| F | Focused LHS refine |
+| G | Bayesian exploit cadence |
+| H | Promotion gate (score / drawdown / stability / slippage / support / diversity) |
+
+## Operational Boundary
+
+- Optimizer scores candidates and decides promotion — it does not execute trades
+- It does not bypass Medulla or Brain Stem gates
+- Gold parameter changes take effect only after vault write/coronation and Soul hot-reload (`_check_vault_mutation()` on each MINT)
+
+## Search Space
+
+24-D. See `bounds/README.md` for full parameter table.
