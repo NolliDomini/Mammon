@@ -582,7 +582,20 @@
           }
         } catch (err) { addLog('SSE parse error', 'error'); }
       };
-      evtSource.onerror = () => { setStatus('SSE_DISCONNECTED'); };
+      evtSource.onerror = () => {
+        setStatus('SSE_DISCONNECTED');
+        // EventSource auto-retries on transient errors. If it ends up CLOSED
+        // (readyState=2, e.g. server returned non-200), schedule a fresh connect.
+        setTimeout(() => {
+          if (evtSource && evtSource.readyState === EventSource.CLOSED) {
+            addLog('SSE lost — reconnecting...', 'error');
+            connectSSE();
+          }
+        }, 5000);
+      };
+      evtSource.onopen = () => {
+        if (engineActive) setStatus(`${(state.mode || 'DRY_RUN')}_ACTIVE`);
+      };
     }
 
     function disconnectSSE() {

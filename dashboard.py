@@ -1382,13 +1382,22 @@ def api_stream():
                     state.sse_clients.remove(client_q)
                 no_clients_left = not state.sse_clients
             # When the last browser client drops, hard-stop everything.
-            # This is the reliable path — beforeunload beacons are not guaranteed on hard closes.
+            # Delay briefly so the browser's EventSource auto-reconnect can register
+            # a new client before we decide no_clients_left is final. Without this
+            # a transient network blip (BrokenPipeError mid-yield) races with the
+            # browser's 2-3s reconnect and falsely triggers _hard_stop.
             if STOP_ON_WINDOW_CLOSE and no_clients_left:
-                _hard_stop(
-                    source="sse_disconnect",
-                    reason="all_clients_disconnected",
-                    detail="All SSE clients dropped — hard stop per STOP_ON_WINDOW_CLOSE policy",
-                )
+                def _deferred_stop():
+                    time.sleep(4)
+                    with state.lock:
+                        still_no_clients = not state.sse_clients
+                    if still_no_clients:
+                        _hard_stop(
+                            source="sse_disconnect",
+                            reason="all_clients_disconnected",
+                            detail="All SSE clients dropped — hard stop per STOP_ON_WINDOW_CLOSE policy",
+                        )
+                threading.Thread(target=_deferred_stop, daemon=True).start()
 
     return Response(
         generate(),
