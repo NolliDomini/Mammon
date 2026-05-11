@@ -293,8 +293,36 @@ class Orchestrator:
                 elif pulse_type == "SEED" and lh_ready:
                     self._run_lobe("Left_Hemisphere", self.lobes["Left_Hemisphere"].simulate, metrics, pulse_type, frame=self.frame, walk_seed=walk_seed)
 
-            # MINT finalization path: execute deferred ACTION approvals.
+            # MINT finalization path: execute deferred ACTION approvals OR fresh MINT signal.
+            # Donchian breakout (tier1_signal) requires the CLOSED bar — the final close is
+            # only available at MINT, not at ACTION. If tier1_signal=1 first appears here,
+            # run the full approval chain now so Brain_Stem can fire this pulse.
             if pulse_type == "MINT" and "Brain_Stem" in self.lobes:
+                if (
+                    self.frame.structure.tier1_signal == 1
+                    and not self.frame.command.ready_to_fire
+                    and lh_ready
+                ):
+                    self._run_lobe("Gatekeeper", self.lobes["Gatekeeper"].decide, metrics, pulse_type, frame=self.frame)
+                    if "AllocationGland" in self.lobes and self.frame.command.ready_to_fire:
+                        if hasattr(self.lobes["Brain_Stem"], "_run_valuation_gate"):
+                            _bs = self.lobes["Brain_Stem"]
+                            _prior = _bs._get_prior(self.frame)
+                            _val = _bs._run_valuation_gate(self.frame, _prior, walk_seed)
+                            _price = float(self.frame.structure.price or 0.0)
+                            self.frame.valuation.mean = float(_val["mean"])
+                            self.frame.valuation.std_dev = float(_val["sigma"])
+                            self.frame.valuation.upper_band = float(_val["upper"])
+                            self.frame.valuation.lower_band = float(_val["lower"])
+                            self.frame.valuation.z_distance = float(
+                                (_val["mean"] - _price) / max(float(_val["sigma"]), 1e-9)
+                            )
+                        self._run_lobe("AllocationGland", self.lobes["AllocationGland"].allocate, metrics, pulse_type, frame=self.frame)
+                    if self.frame.command.ready_to_fire and not can_trade:
+                        self.frame.command.approved = 0
+                        self.frame.command.ready_to_fire = False
+                        self.frame.command.reason = "Trading gate locked (FORNIX/WARMUP/LOCKED)"
+
                 self._run_lobe(
                     "Brain_Stem",
                     self.lobes["Brain_Stem"].load_and_hunt,
