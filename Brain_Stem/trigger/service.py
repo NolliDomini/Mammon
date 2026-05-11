@@ -336,6 +336,80 @@ class Trigger:
                             qty=qty,
                             price=price,
                         )
+            # Fresh MINT: orchestrator ran Gatekeeper+AllocationGland at MINT and
+            # approved (ready_to_fire=True), but no deferred ACTION entry exists.
+            # Happens when tier1_signal=1 first appears at bar close (not mid-bar).
+            # Run Brain_Stem's own gates and fire immediately if they pass.
+            if (
+                self.pending_entry is None
+                and self.position is None
+                and bool(getattr(frame.command, "ready_to_fire", False))
+                and int(getattr(frame.command, "approved", 0) or 0) == 1
+                and self.treasury is not None
+                and self._trading_enabled(orchestrator)
+            ):
+                valid_payload, symbol, qty, price = self._valid_execution_payload(frame)
+                if valid_payload:
+                    prior = self._get_prior(frame)
+                    risk = self._run_risk_gate(frame, prior)
+                    val_data = self._run_valuation_gate(frame, prior, walk_seed)
+                    min_risk = float(self.config.get("brain_stem_min_risk", 0.52))
+                    sigma = max(val_data.get("sigma", 0.0), 1e-9)
+                    entry_z = (price - val_data["mean"]) / sigma
+                    entry_max_z = float(self.config.get("brain_stem_entry_max_z", 0.8))
+                    is_safe = risk >= min_risk
+                    is_within_z = entry_z <= entry_max_z
+                    is_conviction = prior > 0.5
+                    min_council = float(self.config.get("gatekeeper_min_council", 0.5))
+                    is_environment_safe = frame.environment.confidence >= min_council
+
+                    frame.risk.monte_score = float(risk)
+                    frame.valuation.mean = float(val_data["mean"])
+                    frame.valuation.std_dev = float(val_data["sigma"])
+                    frame.valuation.upper_band = float(val_data["upper"])
+                    frame.valuation.lower_band = float(val_data["lower"])
+                    frame.valuation.z_distance = float((val_data["mean"] - price) / sigma)
+
+                    if is_safe and is_within_z and is_conviction and is_environment_safe:
+                        intent_id = f"{symbol}:{int(time.time() * 1000)}:{uuid.uuid4().hex[:8]}"
+                        print(
+                            f"   [BRAIN STEM] MINT DIRECT FIRE {symbol} @ {price:.4f} "
+                            f"(Risk={risk:.2f}, Z={entry_z:.2f}, Prior={prior:.2f})"
+                        )
+                        fire_result = self._fire_physical(symbol, "BUY", qty, price)
+                        if not isinstance(fire_result, dict):
+                            fire_result = {"status": "fired", "source": "compat"}
+                        if fire_result.get("status") == "fired":
+                            self.treasury.fire_intent(
+                                intent_id, symbol, "BUY", qty, price,
+                                sigma=sigma, price_ref=price,
+                            )
+                            self.position = {
+                                "side": "LONG",
+                                "entry_price": price,
+                                "entry_ts": time.time(),
+                                "qty": qty,
+                                "bands": val_data,
+                                "symbol": symbol,
+                                "entry_z": entry_z,
+                                "mean_at_entry": val_data["mean"],
+                                "sigma_at_entry": sigma,
+                            }
+                            self._emit_exec_event(
+                                pulse, "FIRE", "MINT_DIRECT_FIRE",
+                                symbol=symbol, intent_id=intent_id, qty=qty, price=price, risk_score=risk,
+                            )
+                        else:
+                            self.last_exit_reason = f"REJECT_ADAPTER_FAILURE ({fire_result.get('msg', 'unknown')})"
+                            self._emit_exec_event(pulse, "REJECT", self.last_exit_reason, symbol=symbol)
+                    else:
+                        reasons = []
+                        if not is_safe: reasons.append(f"Risk({risk:.2f})<{min_risk:.2f}")
+                        if not is_within_z: reasons.append(f"Overextended(z={entry_z:.2f}>{entry_max_z:.2f})")
+                        if not is_conviction: reasons.append(f"Prior({prior:.2f})<=0.5")
+                        if not is_environment_safe: reasons.append("CouncilFailSafe")
+                        print(f"   [BRAIN STEM] MINT DIRECT WAIT: {', '.join(reasons)}")
+
             self.pending_entry = None
             self.mean_dev_monitor_active = False
             self.prev_price = frame.structure.price
