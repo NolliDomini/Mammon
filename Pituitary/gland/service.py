@@ -1,5 +1,6 @@
 import json
 import time
+import threading
 import numpy as np
 from pathlib import Path
 from typing import Dict, Any, List, Optional
@@ -10,7 +11,7 @@ from sklearn.gaussian_process.kernels import Matern
 from Hippocampus.Archivist.librarian import librarian
 from Hospital.Optimizer_loop.bounds import MINS, MAXS, normalize_weights
 
-# Canonical 23-D parameter key order (matches bounds.py)
+# Canonical 24-D parameter key order (matches bounds.py)
 PARAM_KEYS = [
     "active_gear",
     "monte_noise_scalar",
@@ -22,7 +23,8 @@ PARAM_KEYS = [
     "brain_stem_sigma", "brain_stem_bias",
     "brain_stem_entry_max_z", "brain_stem_mean_dev_cancel_sigma",
     "brain_stem_stale_price_cancel_bps", "brain_stem_mean_rev_target_sigma",
-    "stop_loss_mult", "breakeven_mult"
+    "stop_loss_mult", "breakeven_mult",
+    "brain_stem_min_risk",
 ]
 
 PARAM_DEFAULTS = {
@@ -30,6 +32,7 @@ PARAM_DEFAULTS = {
     "brain_stem_mean_dev_cancel_sigma": 0.0,
     "brain_stem_stale_price_cancel_bps": 25.0,
     "brain_stem_mean_rev_target_sigma": 0.0,
+    "brain_stem_min_risk": 0.52,
 }
 
 @dataclass
@@ -62,7 +65,9 @@ class PituitaryGland:
 
         # V3.2 GROWTH HORMONE: MINT cadence tracking
         self.mint_count = 0
-        self.gp_cadence = 4  # Fire GP every Nth MINT
+        self.gp_cadence = 4       # Fire GP every Nth MINT
+        self.diamond_cadence = 288 # Fire diamond deep search every Nth MINT (~1 trading day at 5m bars)
+        self._diamond_thread: Optional[threading.Thread] = None
 
     # ──────────────────────────────────────────────
     # V3.2 GROWTH HORMONE — GP Mutation Cycle
@@ -90,6 +95,27 @@ class PituitaryGland:
             print(f"[PITUITARY_ERROR] GP mutation failed: {e}")
             import traceback
             traceback.print_exc()
+
+        if self.mint_count % self.diamond_cadence == 0:
+            self._launch_diamond_search()
+
+    def _launch_diamond_search(self):
+        """Fire DiamondGland.perform_deep_search() in a background daemon thread.
+        Guards against double-launch if a previous search is still running."""
+        if self._diamond_thread is not None and self._diamond_thread.is_alive():
+            print("[PITUITARY] Diamond search already running — skipping launch.")
+            return
+
+        def _run():
+            try:
+                from Pituitary.search.diamond import DiamondGland
+                DiamondGland().perform_deep_search()
+            except Exception as exc:
+                print(f"[PITUITARY_ERROR] Diamond deep search failed: {exc}")
+
+        self._diamond_thread = threading.Thread(target=_run, daemon=True, name="diamond-search")
+        self._diamond_thread.start()
+        print(f"[PITUITARY] MINT #{self.mint_count} — Diamond deep search launched in background.")
 
     @staticmethod
     def _extract_fitness(entry: Dict[str, Any], default: float = 0.5) -> float:
@@ -263,7 +289,7 @@ class PituitaryGland:
         print(f"   Derived from: {tier_names} | Predicted fitness: {best_fitness:.4f}")
 
     def _params_to_vector(self, params: Dict[str, Any]) -> Optional[np.ndarray]:
-        """Converts a flat param dict to a 23-D numpy vector using PARAM_KEYS order."""
+        """Converts a flat param dict to a 24-D numpy vector using PARAM_KEYS order."""
         try:
             values = []
             for i, key in enumerate(PARAM_KEYS):
@@ -280,7 +306,7 @@ class PituitaryGland:
             return None
 
     def _vector_to_params(self, vec: np.ndarray) -> Dict[str, Any]:
-        """Converts a 23-D numpy vector back to a flat param dict."""
+        """Converts a 24-D numpy vector back to a flat param dict."""
         params = {}
         for i, key in enumerate(PARAM_KEYS):
             val = float(vec[i])
@@ -293,7 +319,7 @@ class PituitaryGland:
     def validate_hormonal_integrity(self, params: Dict[str, Any]) -> bool:
         """
         Piece 14 Safety Gate:
-        Ensures all 23-D keys are present and values are within absolute MIN/MAX bounds.
+        Ensures all 24-D keys are present and values are within absolute MIN/MAX bounds.
         """
         for i, key in enumerate(PARAM_KEYS):
             if key not in params:

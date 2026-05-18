@@ -356,10 +356,14 @@ class TreasuryGland:
         pos_avg = float(rows[0]["avg_price"]) if rows else 0.0
         realized = float(rows[0]["realized_pnl"]) if rows else 0.0
 
-        signed = qty if side.upper() == "BUY" else -qty
-        new_qty = pos_qty + signed
+        side_u = side.upper()
+        if side_u == "SELL":
+            # Long-only: can only sell what is held, never go short.
+            qty = min(qty, max(pos_qty, 0.0))
+        signed = qty if side_u == "BUY" else -qty
+        new_qty = max(pos_qty + signed, 0.0)
         new_avg = pos_avg
-        if side.upper() == "BUY":
+        if side_u == "BUY":
             if pos_qty <= 0:
                 new_avg = fill_price
             else:

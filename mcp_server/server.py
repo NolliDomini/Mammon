@@ -29,7 +29,7 @@ SQLITE_DBS: dict[str, Path] = {
     "money":    BASE / "runtime/.tmp_test_local/compat_librarian.db",
     "memory":   BASE / "Hippocampus/Archivist/Ecosystem_Memory.db",
     "synapse":  BASE / "Hippocampus/Archivist/Ecosystem_Synapse.db",
-    "ui":       BASE / "Hippocampus/data/Ecosystem_UI.db",
+    "ui":       BASE / "Hippocampus/Archivist/Ecosystem_UI.db",
     "hospital": BASE / "Hospital/Memory_care/control_logs.db",
 }
 

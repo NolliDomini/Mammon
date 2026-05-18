@@ -317,5 +317,24 @@ class Gatekeeper:
             """, (self.mode, 1, 'AMBUSH', tier_score, council_score, min_tier, min_council, cmd.approved, cmd.final_confidence, cmd.sizing_mult, cmd.reason, pulse_type))
         except Exception:
             pass
+        if cmd.reason != "APPROVED":
+            try:
+                from Hospital.Memory_care.control_log_scribe import ControlLogScribe
+                ControlLogScribe().log(
+                    decision=cmd.reason,
+                    reason=cmd.reason,
+                    source="Gatekeeper",
+                    pulse_type=pulse_type,
+                    details={
+                        "tier_score": tier_score,
+                        "council_score": council_score,
+                        "min_tier": min_tier,
+                        "min_council": min_council,
+                        "final_confidence": cmd.final_confidence,
+                        "mode": self.mode,
+                    },
+                )
+            except Exception:
+                pass
 
     def get_state(self): return {}

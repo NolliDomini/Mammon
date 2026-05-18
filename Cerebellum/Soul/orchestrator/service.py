@@ -92,7 +92,13 @@ class Orchestrator:
             except Exception as ce:
                 print(f"[SOUL_WARN] Crawler unavailable: {ce}")
         self.opt_lib = OptimizerLibrarian()
-        self.active_strikes: List[Dict[str, Any]] = [] 
+        self.active_strikes: List[Dict[str, Any]] = []
+        try:
+            from Hippocampus.Archivist.ui_scribe import UiScribe
+            self._ui_scribe = UiScribe()
+        except Exception as _ue:
+            print(f"[SOUL_WARN] UiScribe unavailable: {_ue}")
+            self._ui_scribe = None
 
         # V6: Optical Tract Subscription
         self.optical_tract = optical_tract
@@ -302,8 +308,10 @@ class Orchestrator:
                     self.frame.structure.tier1_signal == 1
                     and not self.frame.command.ready_to_fire
                     and lh_ready
+                    and not getattr(self.lobes["Brain_Stem"], "pending_entry", None)
+                    and getattr(self.lobes["Brain_Stem"], "position", None) is None
                 ):
-                    self._run_lobe("Gatekeeper", self.lobes["Gatekeeper"].decide, metrics, pulse_type, frame=self.frame)
+                    self._run_lobe("Gatekeeper", self.lobes["Gatekeeper"].decide, metrics, "ACTION", frame=self.frame)
                     if "AllocationGland" in self.lobes and self.frame.command.ready_to_fire:
                         if hasattr(self.lobes["Brain_Stem"], "_run_valuation_gate"):
                             _bs = self.lobes["Brain_Stem"]
@@ -337,6 +345,7 @@ class Orchestrator:
             # 7. Final State Scribe (Maintenance Hooks in deterministic order)
             hook_status = {
                 "amygdala": "skipped",
+                "ui_scribe": "skipped",
                 "pineal": "skipped",
                 "vault_reload": "skipped",
                 "pituitary": "skipped",
@@ -348,6 +357,12 @@ class Orchestrator:
             except Exception as e:
                 hook_status["amygdala"] = f"error:{type(e).__name__}"
                 print(f"[SOUL_WARN] Amygdala failed: {e}")
+            if pulse_type == "MINT" and self._ui_scribe is not None:
+                try:
+                    self._ui_scribe.write_mint(self.frame)
+                    hook_status["ui_scribe"] = "ok"
+                except Exception as e:
+                    hook_status["ui_scribe"] = f"error:{type(e).__name__}"
             
             # 8. Memory & Hormonal Management
             if pulse_type == "MINT":

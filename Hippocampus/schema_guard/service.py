@@ -28,7 +28,7 @@ def _db_targets(root: Path) -> List[Tuple[str, Path, str]]:
         ("sqlite", root / "Hippocampus" / "Archivist" / "Ecosystem_Synapse.db", "synapse-v1"),
         ("sqlite", root / "Hippocampus" / "Archivist" / "Ecosystem_Optimizer.db", "optimizer-v1"),
         ("sqlite", root / "Hospital" / "Memory_care" / "control_logs.db", "control-v1"),
-        ("sqlite", root / "Hippocampus" / "data" / "Ecosystem_UI.db", "ui-v1"),
+        ("sqlite", root / "Hippocampus" / "Archivist" / "Ecosystem_UI.db", "ui-v1"),
         ("duckdb", root / "Hospital" / "Memory_care" / "duck.db", "duck-v1"),
     ]
 
@@ -123,7 +123,7 @@ def _expected_tables() -> Dict[str, List[str]]:
         "synapse-v1": ["schema_version", "synapse_mint"],
         "optimizer-v1": ["schema_version"],
         "control-v1": ["schema_version"],
-        "ui-v1": ["schema_version", "ui_control_audit", "ui_projection_deadletter", "ui_orders"],
+        "ui-v1": ["schema_version", "ui_pulse_tape"],
         "duck-v1": ["schema_version", "market_tape", "history_synapse", "fornix_checkpoint"],
     }
 
